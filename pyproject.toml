@@ -1,0 +1,16 @@
+[project]
+name = "agent-hub"
+version = "0.1.0"
+description = "Cross-vendor AI agent orchestration hub (Claude Code / Codex / Kimi) with a web transcript viewer"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+hub = "agent_hub.server:main"
+hub-runner = "agent_hub.runner:main"
+hub-mcp = "agent_hub.mcp_server:main"
+hubctl = "agent_hub.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"

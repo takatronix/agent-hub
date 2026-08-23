@@ -1,0 +1,15 @@
+[Unit]
+Description=agent-hub runner (executes claude / codex / kimi tasks on this machine)
+After=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/agent-hub
+Environment=PATH=/home/%i/.local/bin:/home/%i/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/%i/agent-hub/bin/hub-runner -c /home/%i/.agent-hub/runner.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agent-hub": {
+      "command": "/Users/takatronix/projects/agent-hub/bin/hub-mcp",
+      "env": {
+        "HUB_URL": "http://100.67.35.127:8765",
+        "HUB_TOKEN": "change-me-write-token",
+        "HUB_PUBLIC_URL": "http://macstudio:8765"
+      }
+    }
+  }
+}

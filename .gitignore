@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+runner.json
+*.sqlite3*
+artifacts/
+.venv/

@@ -1,0 +1,15 @@
+[Unit]
+Description=agent-hub (AI agent orchestration hub)
+After=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/agent-hub
+EnvironmentFile=/home/%i/agent-hub/.env
+ExecStart=/home/%i/agent-hub/bin/hub
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
