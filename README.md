@@ -66,7 +66,7 @@ deploy/install-runner.sh http://<hub-tailscale-ip>:8765 <HUB_TOKEN>
 ```jsonc
 {"name": "claude-a", "kind": "claude", "env": {"CLAUDE_CONFIG_DIR": "~/.claude-a"}, "model": "opus"}
 {"name": "codex",    "kind": "codex",  "sandbox": "workspace-write"}
-{"name": "kimi",     "kind": "command", "command": ["kimi", "--print", "--output-format", "stream-json"], "jsonl": true}
+{"name": "kimi",     "kind": "command", "command": ["kimi", "--print", "--output-format", "stream-json", "-p", "{prompt}"], "jsonl": true}
 {"name": "fake",     "kind": "fake"}   // 配線確認用
 ```
 
