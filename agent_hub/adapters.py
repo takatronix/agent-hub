@@ -74,6 +74,7 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
     errs: list[str] = []
     _pump_stderr(proc, errs)
     yield {"role": "system", "content": f"$ {shlex.join(cmd)}", "data": {"cwd": workdir}}
+    last_text = ""
     for line in proc.stdout:
         line = line.strip()
         if not line:
@@ -93,6 +94,7 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
             for block in (ev.get("message") or {}).get("content") or []:
                 bt = block.get("type")
                 if bt == "text" and block.get("text"):
+                    last_text = block["text"]
                     yield {"role": "assistant", "content": block["text"], "data": {}}
                 elif bt == "thinking" and block.get("thinking"):
                     yield {"role": "thinking", "content": block["thinking"], "data": {}}
@@ -111,8 +113,9 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
             res.final = ev.get("result") or res.final
             res.usage = {k: ev.get(k) for k in ("total_cost_usd", "duration_ms", "num_turns", "usage") if k in ev}
             res.session_id = ev.get("session_id") or res.session_id
-            yield {"role": "result", "content": res.final, "data": {**res.usage, "is_error": ev.get("is_error", False),
-                                                                     "subtype": ev.get("subtype")}}
+            data = {**res.usage, "is_error": ev.get("is_error", False), "subtype": ev.get("subtype")}
+            # the final text was already shown as the last assistant message; don't repeat it
+            yield {"role": "result", "content": "" if res.final == last_text else res.final, "data": data}
     res.exit_code = proc.wait()
     if errs:
         yield {"role": "stderr", "content": "\n".join(errs[-60:]), "data": {}}
@@ -174,7 +177,7 @@ def run_codex(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapte
         elif t == "turn.completed":
             res.usage = ev.get("usage") or {}
             res.final = last_agent_text
-            yield {"role": "result", "content": res.final, "data": {"usage": res.usage}}
+            yield {"role": "result", "content": "", "data": {"usage": res.usage}}
         elif t in ("turn.failed", "error"):
             yield {"role": "stderr", "content": json.dumps(ev, ensure_ascii=False)[:4000], "data": {}}
         # legacy (pre-0.40) event format: {"msg": {"type": "agent_message", "message": ...}}
