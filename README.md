@@ -71,7 +71,7 @@ deploy/install-runner.sh http://<hub-tailscale-ip>:8765 <HUB_TOKEN>
 ```
 
 - `claude`: `claude -p --output-format stream-json`。既定で `--dangerously-skip-permissions`（`"skip_permissions": false` で外せる）。複数アカウントは `CLAUDE_CONFIG_DIR` を変えた agent を複数並べるだけ。
-- `codex`: `codex exec --json --full-auto`。
+- `codex`: `codex exec --json --sandbox workspace-write`（stdin でプロンプト）。`"bypass_sandbox": true` で sandbox 解除。
 - `command`: 任意コマンド。`{prompt}` を引数に埋めるか stdin で渡す。`jsonl: true` なら行 JSON から text を拾う。
 - 1 エージェント = 同時 1 タスク。同じ CLI を並列で回したいなら名前を変えて複数定義。
 

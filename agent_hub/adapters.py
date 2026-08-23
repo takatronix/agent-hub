@@ -86,8 +86,9 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
         t = ev.get("type")
         if t == "system":
             res.session_id = ev.get("session_id") or res.session_id
-            yield {"role": "system", "content": f"session {ev.get('session_id','')} model={ev.get('model','')}",
-                   "data": {k: ev.get(k) for k in ("model", "cwd", "tools", "permissionMode") if k in ev}}
+            if ev.get("subtype") == "init":  # other system events (hooks, status) are noise for the transcript
+                yield {"role": "system", "content": f"session {ev.get('session_id','')} model={ev.get('model','')}",
+                       "data": {k: ev.get(k) for k in ("model", "cwd", "permissionMode") if k in ev}}
         elif t == "assistant":
             for block in (ev.get("message") or {}).get("content") or []:
                 bt = block.get("type")
@@ -126,10 +127,10 @@ def run_codex(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapte
         cmd += ["--model", cfg["model"]]
     if cfg.get("sandbox", "workspace-write"):
         cmd += ["--sandbox", cfg.get("sandbox", "workspace-write")]
-    if cfg.get("full_auto", True):
-        cmd += ["--full-auto"]
+    if cfg.get("bypass_sandbox"):
+        cmd += ["--dangerously-bypass-approvals-and-sandbox"]
     cmd += list(cfg.get("args") or [])
-    cmd += ["-"]  # prompt from stdin
+    # no positional prompt: codex exec reads the instructions from stdin
     env = _env(cfg.get("env"))
     proc = _spawn(cmd, workdir, env, stdin_text=prompt)
     assert proc.stdin and proc.stdout
