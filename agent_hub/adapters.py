@@ -401,14 +401,16 @@ def run_kimi(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapter
     if workdir:
         cmd += ["-w", workdir]
     cmd += list(cfg.get("args") or [])
-    cmd += ["-p", prompt]
+    # prompt goes through stdin: a prompt starting with "/" would otherwise be read as a slash command
+    cmd += ["--input-format", "text"]
     env = _env(cfg.get("env"))
-    proc = _spawn(cmd, workdir, env)
-    assert proc.stdout
+    proc = _spawn(cmd, workdir, env, stdin_text=prompt)
+    assert proc.stdin and proc.stdout
+    proc.stdin.write(prompt)
+    proc.stdin.close()
     errs: list[str] = []
     _pump_stderr(proc, errs)
-    shown = cmd[:-1] + ["<prompt>"]
-    yield {"role": "system", "content": f"$ {shlex.join(shown)}", "data": {"cwd": workdir}}
+    yield {"role": "system", "content": f"$ {shlex.join(cmd)}  < prompt", "data": {"cwd": workdir}}
     last_text = ""
     for line in proc.stdout:
         line = line.strip()
@@ -454,6 +456,7 @@ def run_kimi(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapter
     res.exit_code = proc.wait()
     res.final = last_text
     yield {"role": "result", "content": "", "data": {}}
+    errs = [e for e in errs if e.strip() and not e.startswith("To resume this session")]
     if errs:
         yield {"role": "stderr", "content": "\n".join(errs[-60:]), "data": {}}
 
