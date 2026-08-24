@@ -326,7 +326,7 @@ def run_api(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterR
     if workdir:
         prompt = f"(Note: the working directory on the runner is {workdir}, but you have no file access.)\n\n" + prompt
     messages.append({"role": "user", "content": prompt})
-    body = {"model": model, "messages": messages, "stream": True}
+    body = {"model": model, "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
     if cfg.get("temperature") is not None:
         body["temperature"] = cfg["temperature"]
     if cfg.get("max_tokens"):
@@ -374,6 +374,11 @@ def run_api(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterR
         return
     if reasoning:
         yield {"role": "thinking", "content": "".join(reasoning), "data": {}}
+    # real money: price_in / price_out are USD per 1M tokens (set per agent in runner.json)
+    if res.usage and (cfg.get("price_in") or cfg.get("price_out")):
+        pin, pout = float(cfg.get("price_in") or 0), float(cfg.get("price_out") or 0)
+        cost = res.usage.get("prompt_tokens", 0) * pin / 1e6 + res.usage.get("completion_tokens", 0) * pout / 1e6
+        res.usage = {**res.usage, "total_cost_usd": round(cost, 6), "billing": "api"}
     res.final = "".join(chunks).strip()
     if buf[last_emit:].strip():
         yield {"role": "assistant", "content": buf[last_emit:], "data": {}}
