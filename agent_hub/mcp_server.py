@@ -68,7 +68,8 @@ def t_dispatch(a: dict[str, Any]) -> Any:
 def t_review_panel(a: dict[str, Any]) -> Any:
     c = _client()
     spec = {"prompt": a["prompt"], "solvers": a["solvers"], "reviewers": a.get("reviewers"),
-            "synthesizer": a.get("synthesizer"), "workdir": a.get("workdir"), "models": a.get("models") or {}}
+            "synthesizer": a.get("synthesizer"), "workdir": a.get("workdir"), "models": a.get("models") or {},
+            "angles": a.get("angles") or {}}
     run = c.post("/api/runs", {"recipe": "review_panel", "project": a.get("project", "default"),
                                "title": a.get("title") or a["prompt"][:60], "created_by": "claude-code-mcp", "spec": spec})["run"]
     if a.get("wait", True):
@@ -134,6 +135,7 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable[[dict[str, Any]], Any]]] = 
      {"type": "object", "required": ["prompt", "solvers"], "properties": {
          "prompt": {"type": "string"}, "solvers": AGENT_ARR, "reviewers": AGENT_ARR, "synthesizer": {"type": "string"},
          "models": {"type": "object", "description": "per-agent model override, e.g. {\"claude-aspa1\": \"opus\"}", "additionalProperties": {"type": "string"}},
+         "angles": {"type": "object", "description": "per-solver assigned viewpoint/focus text so agents divide the problem instead of duplicating work", "additionalProperties": {"type": "string"}},
          "workdir": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"},
          "wait": {"type": "boolean"}, "timeout": {"type": "number"}}}, t_review_panel),
     ("parallel", "Same prompt to several agents at once, no review; returns all answers.",

@@ -163,9 +163,14 @@ class Orchestrator:
         self.store.add_message(actor="hub", role="system", run_id=run["id"],
                                content=f"匿名審査を開始: solvers={solvers} reviewers={spec['reviewers']} synthesizer={spec['synthesizer']} "
                                        f"category={state['category']} (記号: {', '.join(f'{k}={v}' for k, v in aliases.items())})")
+        angles = spec.get("angles") or {}
         for agent in solvers:
-            self.store.create_task(project, f"解く [{agent}]", SOLVE_PROMPT.format(agent=agent, prompt=spec["prompt"]),
-                                   agent, run_id=run["id"], step="solve", workdir=spec.get("workdir"), meta=_meta(spec, agent))
+            prompt = SOLVE_PROMPT.format(agent=agent, prompt=spec["prompt"])
+            if angles.get(agent):
+                prompt += ("\n# あなたの担当視点（他の参加者は別の視点を担当しています。ここを深く掘ってください）\n"
+                           f"{angles[agent]}\n")
+            self.store.create_task(project, f"解く [{agent}]", prompt, agent, run_id=run["id"], step="solve",
+                                   workdir=spec.get("workdir"), meta=_meta(spec, agent, angle=angles.get(agent)))
         return run
 
     def _advance_review_panel(self, run, tasks):
