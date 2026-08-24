@@ -103,8 +103,10 @@ def tally(run: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate a finished review_panel run into per-agent results (called by the recipe)."""
     state = run["state"]
     aliases: dict[str, str] = state.get("aliases") or {}
-    per_agent: dict[str, dict[str, Any]] = {a: {"scores": [], "best": 0, "adopted": False, "reviews": 0} for a in aliases.values()}
+    per_agent: dict[str, dict[str, Any]] = {a: {"scores": [], "best": 0, "adopted": False, "reviews": 0, "time": None} for a in aliases.values()}
     for t in tasks:
+        if t["step"] == "solve" and t["agent"] in per_agent and t["meta"].get("duration_s") is not None:
+            per_agent[t["agent"]]["time"] = float(t["meta"]["duration_s"])
         if t["step"] == "review" and t["status"] == "done":
             parsed = t["meta"].get("review") or parse_scores(t.get("result") or "")
             if not parsed:
@@ -123,13 +125,13 @@ def tally(run: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[str, Any]:
     out = {}
     for a, d in per_agent.items():
         out[a] = {"avg": round(sum(d["scores"]) / len(d["scores"]), 2) if d["scores"] else None,
-                  "n": len(d["scores"]), "best": d["best"], "adopted": d["adopted"]}
+                  "n": len(d["scores"]), "best": d["best"], "adopted": d["adopted"], "time": d["time"]}
     return out
 
 
 def leaderboard(runs: list[dict[str, Any]]) -> dict[str, Any]:
     """agent -> category -> {avg, n, best, adopted, runs}; plus 'all' bucket."""
-    acc: dict[str, dict[str, dict[str, Any]]] = defaultdict(lambda: defaultdict(lambda: {"sum": 0.0, "n": 0, "best": 0, "adopted": 0, "runs": 0}))
+    acc: dict[str, dict[str, dict[str, Any]]] = defaultdict(lambda: defaultdict(lambda: {"sum": 0.0, "n": 0, "best": 0, "adopted": 0, "runs": 0, "tsum": 0.0, "tn": 0}))
     for r in runs:
         if r["recipe"] != "review_panel" or r["status"] != "done":
             continue
@@ -143,12 +145,16 @@ def leaderboard(runs: list[dict[str, Any]]) -> dict[str, Any]:
                     x["n"] += d["n"]
                 x["best"] += d.get("best", 0)
                 x["adopted"] += 1 if d.get("adopted") else 0
+                if d.get("time") is not None:
+                    x["tsum"] += d["time"]
+                    x["tn"] += 1
     out: dict[str, Any] = {}
     for agent, cats in acc.items():
         out[agent] = {}
         for cat, x in cats.items():
             out[agent][cat] = {"avg": round(x["sum"] / x["n"], 2) if x["n"] else None, "n": x["n"],
-                               "best": x["best"], "adopted": x["adopted"], "runs": x["runs"]}
+                               "best": x["best"], "adopted": x["adopted"], "runs": x["runs"],
+                               "time": round(x["tsum"] / x["tn"]) if x["tn"] else None}
     return out
 
 
