@@ -378,6 +378,8 @@ def run_api(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterR
     if res.usage and (cfg.get("price_in") or cfg.get("price_out")):
         pin, pout = float(cfg.get("price_in") or 0), float(cfg.get("price_out") or 0)
         cost = res.usage.get("prompt_tokens", 0) * pin / 1e6 + res.usage.get("completion_tokens", 0) * pout / 1e6
+        if res.usage.get("cost_in_usd_ticks"):  # xAI reports the exact charge (1 tick = 1e-10 USD)
+            cost = res.usage["cost_in_usd_ticks"] / 1e10
         res.usage = {**res.usage, "total_cost_usd": round(cost, 6), "billing": "api"}
     res.final = "".join(chunks).strip()
     if buf[last_emit:].strip():
