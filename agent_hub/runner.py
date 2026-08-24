@@ -123,6 +123,8 @@ class AgentWorker(threading.Thread):
             last_flush = time.time()
 
         cfg = {**self.cfg, "name": self.name_}
+        if task["meta"].get("model"):
+            cfg["model"] = task["meta"]["model"]
         try:
             for msg in adapter(task["prompt"], workdir, cfg, res):
                 msg.setdefault("ts", now_iso())

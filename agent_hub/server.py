@@ -162,6 +162,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"agent": st.heartbeat(b["name"], b.get("kind", "unknown"), b.get("host", ""),
                                                      b.get("status", "idle"), b.get("current_task"), b.get("meta"))})
 
+        if (mm := m(r"/api/agents/([^/]+)/delete")) and method == "POST":
+            from urllib.parse import unquote
+            ok = st.delete_agent(unquote(mm.group(1)))
+            st.emit("agent", {"agent": {"name": unquote(mm.group(1)), "deleted": True}})
+            return self._json({"deleted": ok})
+
         if path == "/api/runs" and method == "POST":
             b = self._body()
             for k in ("recipe", "title", "spec"):

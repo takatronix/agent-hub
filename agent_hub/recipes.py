@@ -60,6 +60,15 @@ SYNTH_PROMPT = """あなたは「{agent}」として、複数エージェント�
 """
 
 
+def _meta(spec: dict[str, Any], agent: str, **extra: Any) -> dict[str, Any]:
+    """Per-task meta: model override from spec.models[agent] (+ anything else)."""
+    meta = dict(extra)
+    model = (spec.get("models") or {}).get(agent)
+    if model:
+        meta["model"] = model
+    return meta
+
+
 def _label(task: dict[str, Any]) -> str:
     return task["meta"].get("label") or task["agent"]
 
@@ -109,7 +118,7 @@ class Orchestrator:
     def _start_single(self, project, title, spec, created_by):
         run = self.store.create_run(project, title, "single", spec, created_by, state={"phase": "run"})
         self.store.create_task(project, title, spec["prompt"], spec["agent"], run_id=run["id"],
-                               step="run", workdir=spec.get("workdir"), meta={"label": spec.get("label")})
+                               step="run", workdir=spec.get("workdir"), meta=_meta(spec, spec["agent"], label=spec.get("label")))
         return run
 
     def _advance_single(self, run, tasks):
@@ -122,7 +131,7 @@ class Orchestrator:
         run = self.store.create_run(project, title, "parallel", spec, created_by, state={"phase": "run"})
         for agent in spec["agents"]:
             self.store.create_task(project, f"{title} [{agent}]", spec["prompt"], agent, run_id=run["id"],
-                                   step="run", workdir=spec.get("workdir"))
+                                   step="run", workdir=spec.get("workdir"), meta=_meta(spec, agent))
         return run
 
     def _advance_parallel(self, run, tasks):
@@ -146,7 +155,7 @@ class Orchestrator:
                                content=f"三者評価を開始: solvers={solvers} reviewers={spec['reviewers']} synthesizer={spec['synthesizer']}")
         for agent in solvers:
             self.store.create_task(project, f"解く [{agent}]", SOLVE_PROMPT.format(agent=agent, prompt=spec["prompt"]),
-                                   agent, run_id=run["id"], step="solve", workdir=spec.get("workdir"))
+                                   agent, run_id=run["id"], step="solve", workdir=spec.get("workdir"), meta=_meta(spec, agent))
         return run
 
     def _advance_review_panel(self, run, tasks):
@@ -176,7 +185,7 @@ class Orchestrator:
                     others="\n\n".join(f"## 回答 by {_label(t)}\n{_result(t)}" for t in others),
                 )
                 self.store.create_task(run["project"], f"レビュー [{reviewer}]", prompt, reviewer,
-                                       run_id=run["id"], step="review", workdir=spec.get("workdir"))
+                                       run_id=run["id"], step="review", workdir=spec.get("workdir"), meta=_meta(spec, reviewer))
             return
 
         if phase == "review":
@@ -192,7 +201,7 @@ class Orchestrator:
                 or "(レビューなし)",
             )
             self.store.create_task(run["project"], f"統合 [{spec['synthesizer']}]", prompt, spec["synthesizer"],
-                                   run_id=run["id"], step="synthesize", workdir=spec.get("workdir"))
+                                   run_id=run["id"], step="synthesize", workdir=spec.get("workdir"), meta=_meta(spec, spec["synthesizer"]))
             return
 
         if phase == "synthesize":

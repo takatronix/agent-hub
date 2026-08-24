@@ -56,7 +56,8 @@ def t_dispatch(a: dict[str, Any]) -> Any:
     c = _client()
     run = c.post("/api/runs", {"recipe": "single", "project": a.get("project", "default"), "title": a.get("title") or a["prompt"][:60],
                                "created_by": "claude-code-mcp",
-                               "spec": {"prompt": a["prompt"], "agent": a["agent"], "workdir": a.get("workdir")}})["run"]
+                               "spec": {"prompt": a["prompt"], "agent": a["agent"], "workdir": a.get("workdir"),
+                                        "models": {a["agent"]: a["model"]} if a.get("model") else {}}})["run"]
     if a.get("wait", True):
         run = _wait_run(c, run["id"], float(a.get("timeout", 1800)))
         run = c.get(f"/api/runs/{run['id']}")["run"]
@@ -66,7 +67,7 @@ def t_dispatch(a: dict[str, Any]) -> Any:
 def t_review_panel(a: dict[str, Any]) -> Any:
     c = _client()
     spec = {"prompt": a["prompt"], "solvers": a["solvers"], "reviewers": a.get("reviewers"),
-            "synthesizer": a.get("synthesizer"), "workdir": a.get("workdir")}
+            "synthesizer": a.get("synthesizer"), "workdir": a.get("workdir"), "models": a.get("models") or {}}
     run = c.post("/api/runs", {"recipe": "review_panel", "project": a.get("project", "default"),
                                "title": a.get("title") or a["prompt"][:60], "created_by": "claude-code-mcp", "spec": spec})["run"]
     if a.get("wait", True):
@@ -118,10 +119,12 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable[[dict[str, Any]], Any]]] = 
     ("dispatch", "Send one prompt to one agent and (by default) wait for its final answer.",
      {"type": "object", "required": ["agent", "prompt"], "properties": {
          "agent": {"type": "string"}, "prompt": {"type": "string"}, "workdir": {"type": "string", "description": "absolute path on the runner machine"},
+         "model": {"type": "string", "description": "model override for this job, e.g. opus / fable / sonnet"},
          "project": {"type": "string"}, "title": {"type": "string"}, "wait": {"type": "boolean"}, "timeout": {"type": "number"}}}, t_dispatch),
     ("review_panel", "Cross-vendor review: each solver answers independently, reviewers critique each other, synthesizer merges. Returns the synthesized result.",
      {"type": "object", "required": ["prompt", "solvers"], "properties": {
          "prompt": {"type": "string"}, "solvers": AGENT_ARR, "reviewers": AGENT_ARR, "synthesizer": {"type": "string"},
+         "models": {"type": "object", "description": "per-agent model override, e.g. {\"claude-aspa1\": \"opus\"}", "additionalProperties": {"type": "string"}},
          "workdir": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"},
          "wait": {"type": "boolean"}, "timeout": {"type": "number"}}}, t_review_panel),
     ("parallel", "Same prompt to several agents at once, no review; returns all answers.",

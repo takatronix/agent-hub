@@ -178,6 +178,10 @@ class Store:
         self.emit("agent", {"agent": agent})
         return agent
 
+    def delete_agent(self, name: str) -> bool:
+        with self._lock:
+            return self._conn.execute("DELETE FROM agents WHERE name=?", (name,)).rowcount > 0
+
     def get_agent(self, name: str) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM agents WHERE name=?", (name,)).fetchone()
         return self._agent(row) if row else None
