@@ -67,6 +67,48 @@ SYNTH_PROMPT = """あなたは「{agent}」として、複数の匿名回答と�
 """
 
 
+PLAN_PROMPT = """あなたは「{agent}」として、複数の AI エージェントで取り組む課題の **配役（担当視点の割り当て）** を決めます。
+同じ視点を複数人に重複させず、全員の視点を合わせると課題全体が漏れなく覆われ、かつ各自の個性・実績が活きる割り当てにしてください。
+
+# 課題
+{prompt}
+
+# 参加者プロフィール（Hub が把握している個性と実績）
+{profiles}
+
+# 出力ルール
+- 各参加者に 2〜4 行の「担当視点」を書く（何を深く掘るか、何をしないか）。ファイルを読めない参加者には推論・懐疑・外部知識の役割を。
+- 最後に必ず JSON を 1 つだけ: ```json {{"angles": {{"<参加者名>": "<担当視点>", ...}}}} ```
+"""
+
+
+TRAITS = {
+    "claude": "Claude Code: 慎重で統合が得意。ファイル読み書き・コマンド実行可",
+    "codex": "Codex CLI: 速い実行派。短く要点、コードを動かして確かめる。ファイル読み書き・コマンド実行可",
+    "cursor": "Cursor CLI: コードベース探索・横断検索が得意。ファイル読み書き・コマンド実行可",
+    "kimi": "Kimi K3: 1M トークンの長コンテキスト。大量のコード/ログを一度に読んで俯瞰できる。ファイル読み書き・コマンド実行可",
+    "api": "API 直（Grok 等）: ファイル・コマンドは使えない。別ベンダーの視点・懐疑・外部知識で貢献",
+    "command": "CLI: ファイル読み書き・コマンド実行可",
+}
+
+
+def _profiles(store: Store, agents: list[str], spec: dict[str, Any]) -> str:
+    board = league.leaderboard(store.list_runs(limit=1000))
+    lines = []
+    for a in agents:
+        ag = store.get_agent(a) or {}
+        kind = ag.get("kind") or ("api" if a.startswith(("grok", "qwen")) else a.split("-")[0])
+        model = (spec.get("models") or {}).get(a) or (ag.get("meta") or {}).get("model") or ""
+        stats = board.get(a, {})
+        st = stats.get("all")
+        rec = ""
+        if st and st.get("n"):
+            cats = ", ".join(f"{league.CATEGORY_JA.get(c, c)} {d['avg']}" for c, d in stats.items() if c != "all" and d.get("avg") is not None)
+            rec = f" | 実績: 平均 {st['avg']} 点/{st['n']} 件, 最良 {st['best']} 回, 採用 {st['adopted']} 回" + (f" ({cats})" if cats else "")
+        lines.append(f"- {a} [{kind}{(' / ' + model) if model else ''}] @{ag.get('host', '?')}: {TRAITS.get(kind, kind)}{rec}")
+    return "\n".join(lines)
+
+
 def _meta(spec: dict[str, Any], agent: str, **extra: Any) -> dict[str, Any]:
     """Per-task meta: model override from spec.models[agent] (+ anything else)."""
     meta = dict(extra)
@@ -159,11 +201,27 @@ class Orchestrator:
         }
         aliases = league.make_aliases(solvers)
         state = {"phase": "solve", "aliases": aliases, "category": spec.get("category") or league.guess_category(spec["prompt"])}
+        if spec.get("auto_angles") and not spec.get("angles"):
+            state["phase"] = "plan"
+            run = self.store.create_run(project, title, "review_panel", spec, created_by, state=state)
+            planner = spec.get("planner") or spec["synthesizer"]
+            self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                   content=f"配役フェーズ: {planner} が参加者プロフィールから担当視点を割り当てます。")
+            prompt = PLAN_PROMPT.format(agent=planner, prompt=spec["prompt"], profiles=_profiles(self.store, solvers, spec))
+            self.store.create_task(project, f"配役 [{planner}]", prompt, planner, run_id=run["id"], step="plan",
+                                   workdir=spec.get("workdir"), meta=_meta(spec, planner))
+            return run
         run = self.store.create_run(project, title, "review_panel", spec, created_by, state=state)
+        self._start_solve(run, spec, solvers, aliases)
+        return run
+
+    def _start_solve(self, run, spec, solvers, aliases):
+        state = run["state"]
         self.store.add_message(actor="hub", role="system", run_id=run["id"],
                                content=f"匿名審査を開始: solvers={solvers} reviewers={spec['reviewers']} synthesizer={spec['synthesizer']} "
                                        f"category={state['category']} (記号: {', '.join(f'{k}={v}' for k, v in aliases.items())})")
-        angles = spec.get("angles") or {}
+        project = run["project"]
+        angles = spec.get("angles") or state.get("angles") or {}
         for agent in solvers:
             prompt = SOLVE_PROMPT.format(agent=agent, prompt=spec["prompt"])
             if angles.get(agent):
@@ -171,7 +229,6 @@ class Orchestrator:
                            f"{angles[agent]}\n")
             self.store.create_task(project, f"解く [{agent}]", prompt, agent, run_id=run["id"], step="solve",
                                    workdir=spec.get("workdir"), meta=_meta(spec, agent, angle=angles.get(agent)))
-        return run
 
     def _advance_review_panel(self, run, tasks):
         spec, state = run["spec"], run["state"]
@@ -179,6 +236,20 @@ class Orchestrator:
         by_step: dict[str, list[dict[str, Any]]] = {}
         for t in tasks:
             by_step.setdefault(t["step"], []).append(t)
+
+        if phase == "plan":
+            t = (by_step.get("plan") or [None])[0]
+            angles = {}
+            if t and t["status"] == "done":
+                obj = league.parse_json_block(t.get("result") or "", "angles") or {}
+                angles = {k: str(v) for k, v in (obj.get("angles") or {}).items() if k in spec["solvers"]}
+            state = {**state, "phase": "solve", "angles": angles}
+            self.store.update_run(run["id"], state=state)
+            self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                   content=("配役完了: " + "; ".join(f"{k}: {v.splitlines()[0][:60]}" for k, v in angles.items())) if angles
+                                   else "配役の JSON が取れなかったため、視点なしで開始します。")
+            self._start_solve({**run, "state": state}, spec, spec["solvers"], state.get("aliases") or league.make_aliases(spec["solvers"]))
+            return
 
         if phase == "solve":
             solved = [t for t in by_step.get("solve", []) if t["status"] == "done"]

@@ -72,6 +72,22 @@ class StoreRecipeTest(unittest.TestCase):
         rec = league.recommend(board, run["state"]["category"], [{"name": n, "kind": "claude" if n == "a" else "codex"} for n in "abc"], 2)
         self.assertEqual(rec["solvers"][0], "b")
 
+    def test_auto_angles_plan_phase(self):
+        run = self.orch.start("review_panel", "p", "t", {"prompt": "Q?", "solvers": ["a", "b", "c"], "auto_angles": True})
+        self.assertEqual(run["state"]["phase"], "plan")
+        plan = self.store.list_tasks(run_id=run["id"])
+        self.assertEqual([t["step"] for t in plan], ["plan"])
+        self.store.claim_next(["a"], "x")
+        done = self.store.finish_task(plan[0]["id"], "done", result='ok ```json {"angles": {"a": "学習側", "b": "変換側", "zzz": "ignored"}} ```')
+        self.orch.on_task_finished(done)
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["state"]["phase"], "solve")
+        self.assertEqual(run["state"]["angles"], {"a": "学習側", "b": "変換側"})
+        solves = self.store.list_tasks(run_id=run["id"], status="queued")
+        self.assertEqual(len(solves), 3)
+        self.assertIn("担当視点", next(t for t in solves if t["agent"] == "a")["prompt"])
+        self.assertNotIn("担当視点", next(t for t in solves if t["agent"] == "c")["prompt"])
+
     def test_review_panel_fails_with_one_solver(self):
         run = self.orch.start("review_panel", "p", "t", {"prompt": "Q?", "solvers": ["a", "b"]})
         tasks = self.store.list_tasks(run_id=run["id"])

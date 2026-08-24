@@ -69,7 +69,7 @@ def t_review_panel(a: dict[str, Any]) -> Any:
     c = _client()
     spec = {"prompt": a["prompt"], "solvers": a["solvers"], "reviewers": a.get("reviewers"),
             "synthesizer": a.get("synthesizer"), "workdir": a.get("workdir"), "models": a.get("models") or {},
-            "angles": a.get("angles") or {}}
+            "angles": a.get("angles") or {}, "auto_angles": a.get("auto_angles", True), "planner": a.get("planner")}
     run = c.post("/api/runs", {"recipe": "review_panel", "project": a.get("project", "default"),
                                "title": a.get("title") or a["prompt"][:60], "created_by": "claude-code-mcp", "spec": spec})["run"]
     if a.get("wait", True):
@@ -136,6 +136,8 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable[[dict[str, Any]], Any]]] = 
          "prompt": {"type": "string"}, "solvers": AGENT_ARR, "reviewers": AGENT_ARR, "synthesizer": {"type": "string"},
          "models": {"type": "object", "description": "per-agent model override, e.g. {\"claude-aspa1\": \"opus\"}", "additionalProperties": {"type": "string"}},
          "angles": {"type": "object", "description": "per-solver assigned viewpoint/focus text so agents divide the problem instead of duplicating work", "additionalProperties": {"type": "string"}},
+         "auto_angles": {"type": "boolean", "description": "default true: a planner agent assigns angles from agent profiles (traits + leaderboard) before solving"},
+         "planner": {"type": "string", "description": "agent that assigns angles (default: synthesizer)"},
          "workdir": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"},
          "wait": {"type": "boolean"}, "timeout": {"type": "number"}}}, t_review_panel),
     ("parallel", "Same prompt to several agents at once, no review; returns all answers.",

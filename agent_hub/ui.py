@@ -104,7 +104,7 @@ const api=async(p,body)=>{const h={'Content-Type':'application/json'};if(TOKEN)h
 const KIND={claude:['Claude Code','ファイル・コマンド OK'],codex:['Codex CLI','ファイル・コマンド OK'],command:['CLI','ファイル・コマンド OK'],cursor:['Cursor CLI','ファイル・コマンド OK'],kimi:['Kimi CLI','ファイル・コマンド OK'],api:['API / ローカル LLM','テキストのみ'],fake:['ダミー','配線テスト用'],hub:['hub','']};
 const CAT_JA={algorithm:'アルゴリズム',robotics:'ロボット/ROS',debugging:'デバッグ',design:'設計',docs:'文書/仕様',math:'数理',data:'データ',web:'Web',infra:'インフラ',other:'その他'};
 const RECIPES=[['review_panel','三者評価','全員が独立に解く → 互いにレビュー → 統合役がまとめる'],['parallel','並列','同じ課題を全員に投げて回答を並べる'],['single','単独','1人に1つ頼む']];
-const PHASES={review_panel:[['solve','解く','全員が独立に回答'],['review','相互レビュー','他人の回答を批評'],['synthesize','統合','最終回答をまとめる']],parallel:[['run','実行','全員が回答']],single:[['run','実行','']]};
+const PHASES={review_panel:[['plan','配役','AI が担当視点を割り当て'],['solve','解く','全員が独立に回答'],['review','相互レビュー','他人の回答を批評'],['synthesize','統合','最終回答をまとめる']],parallel:[['run','実行','全員が回答']],single:[['run','実行','']]};
 const kindOf=n=>{const a=agents.find(x=>x.name===n);if(a)return a.kind;if(n==='hub')return'hub';for(const k of['claude','codex','kimi','cursor','qwen','grok','fake'])if(n.startsWith(k))return (k==='qwen'||k==='grok')?'api':k;return'command'};
 const initials=n=>({claude:'C',codex:'X',api:'A',kimi:'K',cursor:'U',command:'T',fake:'F',hub:'H'}[kindOf(n)]||'?');
 const av=(n,cls='')=>`<span class="av c-${kindOf(n)} ${cls}" title="${esc(n)}">${initials(n)}</span>`;
@@ -137,7 +137,7 @@ async function showHome(){$('#crumb').textContent='';const [a,r]=await Promise.a
    <div class="picked" id="picked"></div>
    <div class="step"><span class="n">3</span><h3>進め方</h3></div>
    <div class="recipes" id="recipes"></div>
-   <div class="row" id="synthrow" style="margin-top:10px"><label style="flex:0 1 420px"><span class="tiny">統合役（最終回答をまとめる人。Claude / Codex 推奨）</span><select id="synth"></select></label></div>
+   <div class="row" id="synthrow" style="margin-top:10px"><label style="flex:0 1 420px"><span class="tiny">統合役（最終回答をまとめる人。Claude / Codex 推奨）</span><select id="synth"></select></label><label style="flex:0 1 auto;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="autoangles" checked style="width:auto"> <span class="tiny">配役を AI に任せる（個性・実績から担当視点を割り当て）</span></label></div>
    <div style="margin-top:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button id="start">🚀 開始</button><span class="tiny" id="hint"></span></div>
   </div>
   <div class="card"><h2>ミッション履歴</h2><div class="sub">過去のやりとりは全部ここに残ります</div><div id="runs"></div></div>
@@ -168,7 +168,7 @@ function renderRuns(runs){const el=$('#runs');if(!el)return;const k=runs.map(r=>
  el.innerHTML=runs.map((r,i)=>{const parts=r.spec.solvers||r.spec.agents||(r.spec.agent?[r.spec.agent]:[]);const ph=(PHASES[r.recipe]||[]).find(p=>p[0]===r.state.phase);
   return`<div class="run" style="animation-delay:${i*30}ms" onclick="go('/runs/${r.id}')"><div>${pill(r.status)}</div><div style="min-width:0"><div class="ti">${esc(r.title)}</div><div class="me">${RECIPES.find(x=>x[0]===r.recipe)?.[1]||r.recipe}${r.status==='running'&&ph?' · '+ph[1]+'中':''} · ${esc(r.project)} · ${fmtDt(r.created_at)}</div></div><div class="avs">${parts.map(n=>av(n)).join('')}</div></div>`}).join('')}
 async function start(){const prompt=$('#prompt').value.trim();if(!prompt)return toast('課題を書いてください');
- const spec={prompt,workdir:$('#workdir').value||null,models:Object.fromEntries(selected.filter(n=>models[n]).map(n=>[n,models[n]]))};if(recipe==='review_panel'){spec.solvers=selected;spec.synthesizer=$('#synth').value||selected[0]}else if(recipe==='parallel')spec.agents=selected;else spec.agent=selected[0];
+ const spec={prompt,workdir:$('#workdir').value||null,models:Object.fromEntries(selected.filter(n=>models[n]).map(n=>[n,models[n]]))};if(recipe==='review_panel'){spec.solvers=selected;spec.synthesizer=$('#synth').value||selected[0];spec.auto_angles=$('#autoangles').checked&&selected.length>=3}else if(recipe==='parallel')spec.agents=selected;else spec.agent=selected[0];
  try{const j=await api('/api/runs',{recipe,project:$('#project').value||'default',title:prompt.split('\n')[0].slice(0,70),spec,created_by:'web'});toast('開始しました');go('/runs/'+j.run.id)}catch(e){toast(e.message)}}
 /* ---------------- run ---------------- */
 let RUN=null,MSGS=[],lastId=0,view='cols';
@@ -188,7 +188,7 @@ async function showRun(id){agents=(await api('/api/agents')).agents;const j=awai
  s.addEventListener('run',e=>{const r=JSON.parse(e.data).run;const was=RUN.status;Object.assign(RUN,{status:r.status,state:r.state,summary:r.summary});if(was==='running'&&r.status!=='running'){view='results';toast(r.status==='done'?'✅ ミッション完了':'ミッション終了: '+r.status);window.scrollTo({top:0,behavior:'smooth'})}renderRun()})}
 let bodyKey='';
 function renderRun(){const ph=PHASES[RUN.recipe]||[];const cur=RUN.state.phase;const ci=ph.findIndex(p=>p[0]===cur);const finished=RUN.status!=='running';
- $('#flow').innerHTML=ph.map((p,i)=>{const ts=RUN.tasks.filter(t=>t.step===p[0]);const done=ts.filter(t=>t.status==='done').length;const st=finished||i<ci?'past':i===ci?'cur':'';
+ $('#flow').innerHTML=ph.filter(p=>p[0]!=='plan'||RUN.tasks.some(t=>t.step==='plan')).map((p,i)=>{const ts=RUN.tasks.filter(t=>t.step===p[0]);const done=ts.filter(t=>t.status==='done').length;const st=finished||i<ci?'past':i===ci?'cur':'';
   return`<div class="fs ${st}"><div class="fh"><span>${p[1]}</span><span class="tiny">${ts.length?`${done}/${ts.length}`:''}</span></div><div class="fd">${p[2]}</div><div class="avs">${ts.map(t=>`<span class="av c-${kindOf(t.agent)}" title="${esc(t.agent)}: ${t.status}" style="opacity:${t.status==='done'?1:t.status==='running'?.95:.35};${t.status==='running'?'outline:2px solid var(--warn);animation:beat 1.2s infinite':''}">${initials(t.agent)}</span>`).join('')}</div><div class="bar"><i style="width:${ts.length?Math.round(done/ts.length*100):(st==='past'?100:0)}%"></i></div></div>`}).join('');
  const sumCost=f=>RUN.tasks.filter(f).reduce((s,t)=>s+((t.meta.usage||{}).total_cost_usd||0),0);const costSub=sumCost(t=>(t.meta.kind||kindOf(t.agent))!=='api'),costApi=sumCost(t=>(t.meta.kind||kindOf(t.agent))==='api');const dur=RUN.tasks.reduce((s,t)=>s+(t.meta.duration_s||0),0);
  $('#stat').innerHTML=`<span>参加 <b>${[...new Set(RUN.tasks.map(t=>t.agent))].length}</b></span>${RUN.state.category?`<span>カテゴリ <b>${CAT_JA[RUN.state.category]||RUN.state.category}</b></span>`:''}<span>タスク <b>${RUN.tasks.filter(t=>t.status==='done').length}/${RUN.tasks.length}</b></span><span>AI 稼働 <b>${Math.round(dur)}s</b></span>${timeStat()}${costApi?`<span title="API 従量課金（Grok など）の実費">API 実費 <b>$${costApi.toFixed(3)}</b></span>`:''}${costSub?`<span title="Claude Code の推定額。Max/Pro サブスクなら課金されず利用枠を消費">Claude 推定 <b>$${costSub.toFixed(2)}</b> <span class="tiny">(枠)</span></span>`:''}`;
