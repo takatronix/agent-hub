@@ -128,7 +128,11 @@ class AgentWorker(threading.Thread):
         stop_watch = threading.Event()
 
         def watch_cancel() -> None:
+            ticks = 0
             while not stop_watch.wait(10):
+                ticks += 1
+                if ticks % 3 == 0:  # every 30s: keep the hub's last_seen fresh during long tasks
+                    self.heartbeat("busy")
                 try:
                     st = self.client.get(f"/api/tasks/{task['id']}")["task"]["status"]
                 except Exception:  # noqa: BLE001
