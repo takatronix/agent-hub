@@ -57,7 +57,7 @@ class Hub:
             reason = None
             if agent is None or now - agent["last_seen"] > offline_after:
                 reason = "agent offline"
-            elif now - agent["last_seen"] < agent_grace and agent["status"] == "idle" and agent.get("current_task") != task["id"]:
+            elif now - agent["last_seen"] < 90 and agent["status"] == "idle" and agent.get("current_task") != task["id"]:
                 reason = "agent idle without this task"
             if reason:
                 t = self.store.requeue_task(task["id"], reason)
