@@ -95,8 +95,8 @@ details summary{cursor:pointer;color:var(--mut);font-size:12px;padding:3px 0;lis
 <script>
 const $=s=>document.querySelector(s);
 (function(){let t=null;try{t=localStorage.getItem('theme')}catch(e){}if(t)document.documentElement.dataset.theme=t;document.addEventListener('DOMContentLoaded',()=>{const b=$('#theme');const sync=()=>b.textContent=document.documentElement.dataset.theme==='light'?'☀':'☾';sync();b.onclick=()=>{const n=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=n;try{localStorage.setItem('theme',n)}catch(e){}sync()}})})();const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let TOKEN=new URLSearchParams(location.search).get('token');try{if(TOKEN)localStorage.setItem('hub_token',TOKEN);else TOKEN=localStorage.getItem('hub_token')}catch(e){}const Q='';
-if(location.search.includes('token='))history.replaceState({},'',location.pathname);
+let TOKEN=new URLSearchParams(location.search).get('token');try{if(TOKEN)localStorage.setItem('hub_token',TOKEN);else TOKEN=localStorage.getItem('hub_token')}catch(e){}const Q=TOKEN?'?token='+TOKEN:'';
+if(TOKEN&&!location.search.includes('token='))history.replaceState({},'',location.pathname+Q);
 const go=p=>{history.pushState({},'',p+Q);route()};
 const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2600)};
 const api=async(p,body)=>{const h={'Content-Type':'application/json'};if(TOKEN)h['Authorization']='Bearer '+TOKEN;const r=await fetch(p,{method:body?'POST':'GET',headers:h,body:body?JSON.stringify(body):undefined});const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j};
