@@ -12,7 +12,8 @@ INDEX_HTML = r"""<!doctype html>
  --acc:#5b8cff;--acc2:#8b5cf6;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
  --claude:#f97316;--codex:#14b8a6;--api:#a78bfa;--kimi:#ec4899;--command:#38bdf8;--fake:#6b7280;--hub:#94a3b8;
  --r:16px;--sans:"Inter","Noto Sans JP",-apple-system,"Hiragino Sans",system-ui,sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace}
-@media(prefers-color-scheme:light){:root{--bg:#f4f6fb;--bg2:#ffffff;--card:#ffffff;--card2:#f1f4fa;--line:#e2e6ef;--fg:#141824;--mut:#606a7e;--dim:#9aa3b5}}
+:root[data-theme="light"]{--bg:#f4f6fb;--bg2:#ffffff;--card:#ffffff;--card2:#f1f4fa;--line:#e2e6ef;--fg:#141824;--mut:#606a7e;--dim:#9aa3b5}
+.theme{cursor:pointer;font-size:15px;opacity:.7;transition:.2s;user-select:none}.theme:hover{opacity:1;transform:rotate(20deg)}
 *{box-sizing:border-box}html{background:var(--bg);scroll-behavior:smooth}
 body{margin:0;font:14px/1.6 var(--sans);color:var(--fg);min-height:100vh;background:var(--bg);overflow-x:hidden}
 body:before{content:"";position:fixed;inset:0;z-index:-1;background:radial-gradient(900px 500px at 15% -10%,rgba(91,140,255,.22),transparent 60%),radial-gradient(800px 500px at 100% 0%,rgba(139,92,246,.18),transparent 55%);animation:drift 24s ease-in-out infinite alternate}
@@ -24,7 +25,7 @@ header .crumb{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden
 .live{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px;white-space:nowrap}.live b{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;transition:.3s}.live.on b{background:var(--ok);box-shadow:0 0 0 4px rgba(34,197,94,.15);animation:beat 2s infinite}
 @keyframes beat{0%,100%{box-shadow:0 0 0 3px rgba(34,197,94,.15)}50%{box-shadow:0 0 0 7px rgba(34,197,94,0)}}
 main{max-width:1500px;margin:0 auto;padding:18px}@media(max-width:640px){main{padding:12px}}
-.grid{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}@media(max-width:980px){.grid{grid-template-columns:1fr}}
+.grid{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}.grid>*{min-width:0}@media(max-width:980px){.grid{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:16px;box-shadow:0 10px 30px rgba(0,0,0,.18);animation:rise .45s cubic-bezier(.2,.7,.2,1) both}
 .card:nth-child(2){animation-delay:.06s}.card:nth-child(3){animation-delay:.12s}
 @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
@@ -80,7 +81,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:12px;padding:3px 0;lis
 .typing{display:inline-flex;gap:4px;align-items:center;padding:6px 2px}.typing i{width:6px;height:6px;border-radius:50%;background:var(--mut);animation:tb 1.2s infinite}.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
 @keyframes tb{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-5px);opacity:1}}
 /* markdown */
-.md{line-height:1.7}.md h1,.md h2,.md h3{margin:16px 0 6px;font-size:15px;font-weight:700;padding-bottom:4px;border-bottom:1px solid var(--line)}.md h3{font-size:14px;border:0}.md p{margin:6px 0}.md ul,.md ol{margin:6px 0;padding-left:22px}.md li{margin:2px 0}
+.md{line-height:1.7;overflow-wrap:anywhere}.md h1,.md h2,.md h3{margin:16px 0 6px;font-size:15px;font-weight:700;padding-bottom:4px;border-bottom:1px solid var(--line)}.md h3{font-size:14px;border:0}.md p{margin:6px 0}.md ul,.md ol{margin:6px 0;padding-left:22px}.md li{margin:2px 0}
 .md pre{background:#0a0c11;color:#e8ebf1;border:1px solid var(--line);border-radius:12px;padding:12px 14px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;margin:8px 0}.md code{font-family:var(--mono);font-size:12.5px;background:rgba(127,127,127,.15);padding:1px 5px;border-radius:5px}.md pre code{background:none;padding:0}
 .md blockquote{border-left:3px solid var(--acc2);margin:8px 0;padding:2px 12px;color:var(--mut)}.md table{border-collapse:collapse;margin:8px 0;max-width:100%;display:block;overflow-x:auto}.md td,.md th{border:1px solid var(--line);padding:4px 8px}
 .stat{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--mut)}.stat b{color:var(--fg);font-weight:600}
@@ -88,11 +89,12 @@ details summary{cursor:pointer;color:var(--mut);font-size:12px;padding:3px 0;lis
 .skel{height:14px;border-radius:6px;background:linear-gradient(90deg,var(--card2),var(--line),var(--card2));background-size:200% 100%;animation:shimmer 1.4s linear infinite;margin:8px 0}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--card2);border:1px solid var(--line);padding:10px 16px;border-radius:12px;opacity:0;transition:.3s;z-index:9;box-shadow:0 10px 30px rgba(0,0,0,.3)}.toast.show{opacity:1;transform:translateX(-50%)}
 </style></head><body>
-<header><a class="logo" href="/" onclick="event.preventDefault();go('/')">agent-hub</a><span id="crumb" class="crumb"></span><span class="sp"></span><span id="live" class="live"><b></b>offline</span></header>
+<header><a class="logo" href="/" onclick="event.preventDefault();go('/')">agent-hub</a><span id="crumb" class="crumb"></span><span class="sp"></span><span id="live" class="live"><b></b>offline</span><span class="theme" id="theme" title="テーマ切替">☾</span></header>
 <main id="app"><div class="card"><div class="skel" style="width:40%"></div><div class="skel"></div><div class="skel" style="width:70%"></div></div></main>
 <div class="toast" id="toast"></div>
 <script>
-const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const $=s=>document.querySelector(s);
+(function(){let t=null;try{t=localStorage.getItem('theme')}catch(e){}if(t)document.documentElement.dataset.theme=t;document.addEventListener('DOMContentLoaded',()=>{const b=$('#theme');const sync=()=>b.textContent=document.documentElement.dataset.theme==='light'?'☀':'☾';sync();b.onclick=()=>{const n=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=n;try{localStorage.setItem('theme',n)}catch(e){}sync()}})})();const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const TOKEN=new URLSearchParams(location.search).get('token');const Q=TOKEN?'?token='+TOKEN:'';
 const go=p=>{history.pushState({},'',p+Q);route()};
 const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2600)};
