@@ -24,6 +24,8 @@ class AdapterResult:
         self.exit_code: int | None = None
         self.session_id: str | None = None
         self.usage: dict[str, Any] = {}
+        self.proc: Any = None  # subprocess.Popen when the adapter spawned one (for cancellation)
+        self.cancelled: bool = False
 
 
 def _env(extra: dict[str, str] | None) -> dict[str, str]:
@@ -69,6 +71,7 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
     env = _env(cfg.get("env"))
     env.pop("CLAUDECODE", None)  # allow nesting when the runner itself was started from Claude Code
     proc = _spawn(cmd, workdir, env, stdin_text=prompt)
+    res.proc = proc
     assert proc.stdin
     proc.stdin.write(prompt)
     proc.stdin.close()
@@ -87,6 +90,7 @@ def run_cursor(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
     cmd += [prompt]
     env = _env(cfg.get("env"))
     proc = _spawn(cmd, workdir, env)
+    res.proc = proc
     yield {"role": "system", "content": f"$ {shlex.join(cmd[:-1])} <prompt>", "data": {"cwd": workdir}}
     yield from _claude_like_events(proc, res)
 
@@ -177,6 +181,7 @@ def run_codex(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapte
     # no positional prompt: codex exec reads the instructions from stdin
     env = _env(cfg.get("env"))
     proc = _spawn(cmd, workdir, env, stdin_text=prompt)
+    res.proc = proc
     assert proc.stdin and proc.stdout
     proc.stdin.write(prompt)
     proc.stdin.close()
@@ -254,6 +259,7 @@ def run_command(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adap
     cmd = [a.replace("{prompt}", prompt) for a in template]
     env = _env(cfg.get("env"))
     proc = _spawn(cmd, workdir, env, stdin_text=prompt if use_stdin else None)
+    res.proc = proc
     if use_stdin:
         assert proc.stdin
         proc.stdin.write(prompt)
@@ -445,6 +451,7 @@ def run_kimi(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapter
     cmd += ["--input-format", "text"]
     env = _env(cfg.get("env"))
     proc = _spawn(cmd, workdir, env, stdin_text=prompt)
+    res.proc = proc
     assert proc.stdin and proc.stdout
     proc.stdin.write(prompt)
     proc.stdin.close()

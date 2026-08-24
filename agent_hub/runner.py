@@ -125,6 +125,25 @@ class AgentWorker(threading.Thread):
         cfg = {**self.cfg, "name": self.name_}
         if task["meta"].get("model"):
             cfg["model"] = task["meta"]["model"]
+        stop_watch = threading.Event()
+
+        def watch_cancel() -> None:
+            while not stop_watch.wait(10):
+                try:
+                    st = self.client.get(f"/api/tasks/{task['id']}")["task"]["status"]
+                except Exception:  # noqa: BLE001
+                    continue
+                if st != "running":
+                    res.cancelled = True
+                    log(f"[{self.name_}] task {task['id']} is {st} on hub -> killing subprocess")
+                    if res.proc is not None:
+                        try:
+                            res.proc.kill()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return
+
+        threading.Thread(target=watch_cancel, daemon=True).start()
         try:
             for msg in adapter(task["prompt"], workdir, cfg, res):
                 msg.setdefault("ts", now_iso())
@@ -132,7 +151,11 @@ class AgentWorker(threading.Thread):
                 if len(buf) >= 20 or time.time() - last_flush >= self.flush_interval:
                     flush()
         finally:
+            stop_watch.set()
             flush()
+        if res.cancelled:
+            log(f"[{self.name_}] task {task['id']} cancelled")
+            return
         meta = {"exit_code": res.exit_code, "session_id": res.session_id, "usage": res.usage,
                 "duration_s": round(time.time() - started, 1), "host": self.host, "kind": self.kind}
         if res.exit_code not in (0, None) and not res.final:

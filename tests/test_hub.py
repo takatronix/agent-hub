@@ -80,6 +80,14 @@ class StoreRecipeTest(unittest.TestCase):
             self.orch.on_task_finished(self.store.finish_task(t["id"], st, result="r" if st == "done" else None, error="boom" if st == "failed" else None))
         self.assertEqual(self.store.get_run(run["id"])["status"], "failed")
 
+    def test_cancel_stops_running_tasks(self):
+        run = self.orch.start("parallel", "p", "t", {"prompt": "Q", "agents": ["a", "b"]})
+        self.store.claim_next(["a"], "a@x")
+        self.orch.cancel(run["id"])
+        self.assertEqual({t["status"] for t in self.store.list_tasks(run_id=run["id"])}, {"cancelled"})
+        t = self.store.list_tasks(run_id=run["id"])[0]
+        self.assertEqual(self.store.finish_task(t["id"], "done", result="late")["status"], "cancelled")
+
     def test_claim_is_atomic_and_ordered(self):
         self.store.create_task("p", "t1", "p1", "a")
         self.store.create_task("p", "t2", "p2", "a")

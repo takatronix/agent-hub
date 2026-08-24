@@ -313,6 +313,8 @@ class Store:
             task = self.get_task(task_id)
             if not task:
                 raise KeyError(task_id)
+            if task["status"] == "cancelled":  # cancelled while the runner was still working: keep it cancelled
+                return task
             meta = {**task["meta"], **(meta_update or {})}
             ts = now_iso()
             self._conn.execute(
@@ -343,12 +345,17 @@ class Store:
         return task
 
     def cancel_queued(self, run_id: str) -> int:
+        """Cancel queued AND running tasks of a run; runners notice and kill their subprocess."""
         with self._lock:
+            ids = [r["id"] for r in self._conn.execute(
+                "SELECT id FROM tasks WHERE run_id=? AND status IN ('queued','running')", (run_id,)).fetchall()]
             cur = self._conn.execute(
-                "UPDATE tasks SET status='cancelled', updated_at=? WHERE run_id=? AND status='queued'",
-                (now_iso(), run_id),
+                "UPDATE tasks SET status='cancelled', finished_at=?, updated_at=? WHERE run_id=? AND status IN ('queued','running')",
+                (now_iso(), now_iso(), run_id),
             )
-            return cur.rowcount
+        for tid in ids:
+            self.emit("task", {"task": self.get_task(tid)})
+        return cur.rowcount
 
     def _task(self, row: sqlite3.Row) -> dict[str, Any]:
         t = dict(row)
