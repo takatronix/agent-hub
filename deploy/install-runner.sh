@@ -10,7 +10,7 @@ if [ ! -f ~/.agent-hub/runner.json ]; then
   add(){ agents=$(python3 -c "import json,sys;a=json.loads(sys.argv[1]);a.append(json.loads(sys.argv[2]));print(json.dumps(a))" "$agents" "$1"); }
   command -v claude >/dev/null 2>&1 || [ -x ~/.local/bin/claude ] && add "{\"name\":\"claude-$HOST\",\"kind\":\"claude\",\"model\":\"sonnet\"}"
   command -v codex  >/dev/null 2>&1 || [ -x ~/.local/bin/codex  ] && add "{\"name\":\"codex-$HOST\",\"kind\":\"codex\"}"
-  command -v kimi   >/dev/null 2>&1 || [ -x ~/.local/bin/kimi   ] && add "{\"name\":\"kimi-$HOST\",\"kind\":\"command\",\"command\":[\"kimi\",\"--print\",\"--output-format\",\"stream-json\",\"-p\",\"{prompt}\"],\"jsonl\":true}"
+  command -v kimi   >/dev/null 2>&1 || [ -x ~/.local/bin/kimi   ] && add "{\"name\":\"kimi-$HOST\",\"kind\":\"kimi\"}"
   add "{\"name\":\"fake-$HOST\",\"kind\":\"fake\"}"
   python3 - "$HUB_URL" "$TOKEN" "$HOST" "$agents" <<'PY'
 import json,sys,os

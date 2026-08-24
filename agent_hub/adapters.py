@@ -388,7 +388,84 @@ def run_api(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterR
     res.exit_code = 0
 
 
-ADAPTERS = {"claude": run_claude, "codex": run_codex, "command": run_command, "api": run_api, "fake": run_fake}
+# ---------------------------------------------------------------------------
+# kimi --print --output-format stream-json  (Moonshot Kimi Code CLI)
+# lines: {"role":"assistant","content":[{"type":"think",...},{"type":"text","text":...},{"type":"tool_call",...}]}
+# ---------------------------------------------------------------------------
+def run_kimi(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterResult) -> Iterator[dict[str, Any]]:
+    cmd = [cfg.get("bin", "kimi"), "--print", "--output-format", "stream-json"]
+    if cfg.get("model"):
+        cmd += ["-m", cfg["model"]]
+    if cfg.get("thinking") is False:
+        cmd += ["--no-thinking"]
+    if workdir:
+        cmd += ["-w", workdir]
+    cmd += list(cfg.get("args") or [])
+    cmd += ["-p", prompt]
+    env = _env(cfg.get("env"))
+    proc = _spawn(cmd, workdir, env)
+    assert proc.stdout
+    errs: list[str] = []
+    _pump_stderr(proc, errs)
+    shown = cmd[:-1] + ["<prompt>"]
+    yield {"role": "system", "content": f"$ {shlex.join(shown)}", "data": {"cwd": workdir}}
+    last_text = ""
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("To resume this session"):
+            res.session_id = line.rsplit(" ", 1)[-1]
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            yield {"role": "stderr", "content": line, "data": {}}
+            continue
+        if not isinstance(ev, dict):
+            continue
+        role = ev.get("role")
+        content = ev.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        for block in content or []:
+            if not isinstance(block, dict):
+                continue
+            bt = block.get("type")
+            if bt == "think" and block.get("think"):
+                yield {"role": "thinking", "content": block["think"], "data": {}}
+            elif bt == "text" and block.get("text"):
+                if role in (None, "assistant"):
+                    last_text = block["text"]
+                    yield {"role": "assistant", "content": block["text"], "data": {}}
+                else:
+                    yield {"role": "tool_result", "content": block["text"][-8000:], "data": {"role": role}}
+            elif bt in ("tool_call", "tool_use", "function"):
+                name = block.get("name") or (block.get("function") or {}).get("name") or bt
+                args = block.get("arguments") or block.get("input") or (block.get("function") or {}).get("arguments")
+                if isinstance(args, str):
+                    args = loads_safe(args)
+                yield {"role": "tool_use", "content": _tool_summary(name, args), "data": {"name": name, "input": args}}
+            elif bt in ("tool_result", "tool_response"):
+                out = block.get("output") or block.get("content") or block.get("result") or ""
+                yield {"role": "tool_result", "content": str(out)[-8000:], "data": {"is_error": bool(block.get("is_error"))}}
+            else:
+                yield {"role": "system", "content": json.dumps(block, ensure_ascii=False)[:1500], "data": {}}
+    res.exit_code = proc.wait()
+    res.final = last_text
+    yield {"role": "result", "content": "", "data": {}}
+    if errs:
+        yield {"role": "stderr", "content": "\n".join(errs[-60:]), "data": {}}
+
+
+def loads_safe(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text
+
+
+ADAPTERS = {"claude": run_claude, "codex": run_codex, "kimi": run_kimi, "command": run_command, "api": run_api, "fake": run_fake}
 
 
 def _tool_summary(name: Any, inp: Any) -> str:

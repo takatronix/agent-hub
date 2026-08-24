@@ -99,7 +99,7 @@ const TOKEN=new URLSearchParams(location.search).get('token');const Q=TOKEN?'?to
 const go=p=>{history.pushState({},'',p+Q);route()};
 const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2600)};
 const api=async(p,body)=>{const h={'Content-Type':'application/json'};if(TOKEN)h['Authorization']='Bearer '+TOKEN;const r=await fetch(p,{method:body?'POST':'GET',headers:h,body:body?JSON.stringify(body):undefined});const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j};
-const KIND={claude:['Claude Code','ファイル・コマンド OK'],codex:['Codex CLI','ファイル・コマンド OK'],command:['CLI','ファイル・コマンド OK'],kimi:['Kimi','ファイル・コマンド OK'],api:['API / ローカル LLM','テキストのみ'],fake:['ダミー','配線テスト用'],hub:['hub','']};
+const KIND={claude:['Claude Code','ファイル・コマンド OK'],codex:['Codex CLI','ファイル・コマンド OK'],command:['CLI','ファイル・コマンド OK'],kimi:['Kimi CLI','ファイル・コマンド OK'],api:['API / ローカル LLM','テキストのみ'],fake:['ダミー','配線テスト用'],hub:['hub','']};
 const RECIPES=[['review_panel','三者評価','全員が独立に解く → 互いにレビュー → 統合役がまとめる'],['parallel','並列','同じ課題を全員に投げて回答を並べる'],['single','単独','1人に1つ頼む']];
 const PHASES={review_panel:[['solve','解く','全員が独立に回答'],['review','相互レビュー','他人の回答を批評'],['synthesize','統合','最終回答をまとめる']],parallel:[['run','実行','全員が回答']],single:[['run','実行','']]};
 const kindOf=n=>{const a=agents.find(x=>x.name===n);if(a)return a.kind;if(n==='hub')return'hub';for(const k of['claude','codex','kimi','qwen','fake'])if(n.startsWith(k))return k==='qwen'?'api':k;return'command'};
