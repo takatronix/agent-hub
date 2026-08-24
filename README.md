@@ -70,7 +70,7 @@ deploy/install-runner.sh http://<hub-tailscale-ip>:8765 <HUB_TOKEN>
 {"name": "fake",     "kind": "fake"}   // 配線確認用
 ```
 
-- `claude`: `claude -p --output-format stream-json`。既定で `--dangerously-skip-permissions`（`"skip_permissions": false` で外せる）。複数アカウントは `CLAUDE_CONFIG_DIR` を変えた agent を複数並べるだけ。
+- `claude`: `claude -p --output-format stream-json`。**既定モデルは `sonnet` にしておくこと**（アカウント既定が Fable だと Max の利用枠を急速に消費する）。run ごとに UI / MCP の `models` で opus / fable に上げられる。Max/Pro ログインなら API 課金は発生せず、UI の `$` 表示は推定値。既定で `--dangerously-skip-permissions`（`"skip_permissions": false` で外せる）。複数アカウントは `CLAUDE_CONFIG_DIR` を変えた agent を複数並べるだけ。
 - `codex`: `codex exec --json --sandbox workspace-write`（stdin でプロンプト）。`"bypass_sandbox": true` で sandbox 解除。
 - `api`: OpenAI 互換 chat API を直接叩く（Grok = api.x.ai、Kimi = api.moonshot.ai、Gemini、DeepSeek …）。ツール実行はできないが「解く・レビューする」役には十分。キーは `api_key_env` で環境変数から（runner の systemd unit の `Environment=` か `~/.agent-hub/runner.env`）。
 - `command`: 任意コマンド（Cursor CLI = `cursor-agent -p --output-format stream-json`、kimi CLI など）。`{prompt}` を引数に埋めるか stdin で渡す。`jsonl: true` なら行 JSON から text を拾う。
