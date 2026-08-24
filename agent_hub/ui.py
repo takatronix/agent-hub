@@ -121,8 +121,8 @@ function md(src){let t=esc(src||'');const blocks=[];t=t.replace(/```([\w+-]*)\n(
  if(list)out.push(`</${list}>`);return out.join('\n').replace(/\uE000(\d+)\uE000/g,(m,i)=>blocks[+i])}
 /* ---------------- home ---------------- */
 let selected=[],recipe='review_panel',models={};
-const MODELS={claude:['','sonnet','opus','fable','haiku'],codex:['','gpt-5.5','gpt-5.5-codex','o4-mini'],api:['']};
-function modelSel(n){const k=kindOf(n);const opts=MODELS[k];if(!opts||opts.length<2)return'';return`<select class="msel" onclick="event.stopPropagation()" onchange="models['${n}']=this.value||undefined" style="width:auto;padding:1px 6px;border-radius:8px;font-size:11px;background:transparent;border-color:transparent;color:var(--mut)">${opts.map(o=>`<option value="${o}" ${(models[n]||'')===o?'selected':''}>${o||'既定 (sonnet)'}</option>`).join('')}</select>`}
+const MODELS={claude:['','opus','fable','sonnet','haiku'],codex:['','gpt-5.5','gpt-5.5-codex','o4-mini'],api:['']};
+function modelSel(n){const k=kindOf(n);const opts=MODELS[k];if(!opts||opts.length<2)return'';return`<select class="msel" onclick="event.stopPropagation()" onchange="models['${n}']=this.value||undefined" style="width:auto;padding:1px 6px;border-radius:8px;font-size:11px;background:transparent;border-color:transparent;color:var(--mut)">${opts.map(o=>`<option value="${o}" ${(models[n]||'')===o?'selected':''}>${o||'既定 (opus)'}</option>`).join('')}</select>`}
 async function showHome(){$('#crumb').textContent='';const [a,r]=await Promise.all([api('/api/agents'),api('/api/runs?limit=100')]);agents=a.agents;selected=selected.filter(n=>agents.some(x=>x.name===n&&x.online));
  $('#app').innerHTML=`<div class="grid">
  <aside><div class="card"><h2>エージェント</h2><div class="sub">タップして参加者に追加</div><div id="agents"></div></div></aside>
