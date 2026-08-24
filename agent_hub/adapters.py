@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import urllib.error
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -303,7 +304,84 @@ def run_fake(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapter
     res.exit_code = 0
 
 
-ADAPTERS = {"claude": run_claude, "codex": run_codex, "command": run_command, "fake": run_fake}
+# ---------------------------------------------------------------------------
+# OpenAI-compatible chat API (Grok / Kimi / Gemini / DeepSeek ...): no tools, text only.
+# cfg: base_url, model, api_key or api_key_env, system (optional), temperature, max_tokens
+# ---------------------------------------------------------------------------
+def run_api(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterResult) -> Iterator[dict[str, Any]]:
+    import urllib.request
+
+    base = (cfg.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+    key = cfg.get("api_key") or os.environ.get(cfg.get("api_key_env") or "OPENAI_API_KEY", "")
+    if not key:
+        raise ValueError(f"api adapter: no API key (set api_key or {cfg.get('api_key_env') or 'OPENAI_API_KEY'})")
+    model = cfg.get("model") or "gpt-4o"
+    messages = []
+    system = cfg.get("system") or (
+        "You are an expert software engineer participating in a multi-agent review panel. "
+        "You cannot run code or read files; reason carefully from the text you are given and say so when "
+        "something would need to be verified by execution. Answer in the language of the prompt."
+    )
+    messages.append({"role": "system", "content": system})
+    if workdir:
+        prompt = f"(Note: the working directory on the runner is {workdir}, but you have no file access.)\n\n" + prompt
+    messages.append({"role": "user", "content": prompt})
+    body = {"model": model, "messages": messages, "stream": True}
+    if cfg.get("temperature") is not None:
+        body["temperature"] = cfg["temperature"]
+    if cfg.get("max_tokens"):
+        body["max_tokens"] = cfg["max_tokens"]
+    for k, v in (cfg.get("extra_body") or {}).items():
+        body[k] = v
+    yield {"role": "system", "content": f"POST {base}/chat/completions model={model}", "data": {}}
+    req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {key}")
+    chunks: list[str] = []
+    reasoning: list[str] = []
+    buf = ""
+    last_emit = 0
+    try:
+        with urllib.request.urlopen(req, timeout=float(cfg.get("timeout", 600))) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    ev = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                for choice in ev.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta.get("reasoning_content"):
+                        reasoning.append(delta["reasoning_content"])
+                    if delta.get("content"):
+                        chunks.append(delta["content"])
+                        buf += delta["content"]
+                        # stream to the hub in paragraph-ish pieces so the UI shows progress
+                        if len(buf) - last_emit > 800 and buf.endswith("\n"):
+                            yield {"role": "assistant", "content": buf[last_emit:], "data": {"partial": True}}
+                            last_emit = len(buf)
+                if ev.get("usage"):
+                    res.usage = ev["usage"]
+    except urllib.error.HTTPError as e:  # type: ignore[attr-defined]
+        err = e.read().decode("utf-8", "replace")[:2000]
+        yield {"role": "stderr", "content": f"HTTP {e.code}: {err}", "data": {}}
+        res.exit_code = 1
+        return
+    if reasoning:
+        yield {"role": "thinking", "content": "".join(reasoning), "data": {}}
+    res.final = "".join(chunks).strip()
+    if buf[last_emit:].strip():
+        yield {"role": "assistant", "content": buf[last_emit:], "data": {}}
+    yield {"role": "result", "content": "", "data": {"usage": res.usage}}
+    res.exit_code = 0
+
+
+ADAPTERS = {"claude": run_claude, "codex": run_codex, "command": run_command, "api": run_api, "fake": run_fake}
 
 
 def _tool_summary(name: Any, inp: Any) -> str:

@@ -144,6 +144,7 @@ class AgentWorker(threading.Thread):
 
 def load_config(path: str | None) -> dict[str, Any]:
     load_dotenv()
+    load_dotenv(Path.home() / ".agent-hub" / "runner.env")
     cfg: dict[str, Any] = {}
     if path:
         cfg = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
