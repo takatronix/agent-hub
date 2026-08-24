@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .recipes import Orchestrator
+from . import league
 from .store import Store
 from .util import load_dotenv
 from . import ui
@@ -206,6 +207,19 @@ class Handler(BaseHTTPRequestHandler):
             ok = st.delete_agent(unquote(mm.group(1)))
             st.emit("agent", {"agent": {"name": unquote(mm.group(1)), "deleted": True}})
             return self._json({"deleted": ok})
+
+        if path == "/api/leaderboard" and method == "GET":
+            runs = st.list_runs(limit=1000)
+            return self._json({"leaderboard": league.leaderboard(runs), "categories": league.CATEGORIES,
+                               "categories_ja": league.CATEGORY_JA})
+        if path == "/api/recommend" and method in ("GET", "POST"):
+            b = self._body() if method == "POST" else {}
+            prompt = b.get("prompt") or q1("prompt", "") or ""
+            category = b.get("category") or q1("category") or league.guess_category(prompt)
+            k = int(b.get("k") or q1("k", 3))
+            online = [a for a in st.list_agents() if a["online"] and a["kind"] != "fake"]
+            board = league.leaderboard(st.list_runs(limit=1000))
+            return self._json({"recommend": league.recommend(board, category, online, k)})
 
         if path == "/api/runs" and method == "POST":
             b = self._body()

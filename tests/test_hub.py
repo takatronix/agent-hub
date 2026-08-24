@@ -6,6 +6,7 @@ import unittest
 import urllib.request
 from pathlib import Path
 
+from agent_hub import league
 from agent_hub.client import HubClient
 from agent_hub.recipes import Orchestrator
 from agent_hub.runner import AgentWorker
@@ -37,19 +38,39 @@ class StoreRecipeTest(unittest.TestCase):
         self.assertEqual(run["state"]["phase"], "review")
         reviews = self.store.list_tasks(run_id=run["id"], status="queued")
         self.assertEqual(sorted(t["agent"] for t in reviews), ["a", "b", "c"])
-        self.assertIn("回答 by b", next(t for t in reviews if t["agent"] == "a")["prompt"])
-        self.assertNotIn("回答 by a\na answer", next(t for t in reviews if t["agent"] == "a")["prompt"])
-        self._finish_all(run["id"], "review ok")
+        pa = next(t for t in reviews if t["agent"] == "a")["prompt"]
+        self.assertIn("回答 B", pa)
+        self.assertNotIn("回答 A\n", pa)  # own answer is not among the review targets
+        self.assertNotIn('"A": <1-10>', pa)
+        self.assertIn('"B": <1-10>', pa)
+        for t in reviews:
+            self.store.claim_next([t["agent"]], "test")
+            others = [k for k, v in run["state"]["aliases"].items() if v != t["agent"]]
+            scores = ", ".join(f'"{k}": {7 if k == "B" else 4}' for k in others)
+            done = self.store.finish_task(t["id"], "done", result=f'review\n```json\n{{"scores": {{{scores}}}, "best": "B"}}\n```')
+            self.orch.on_task_finished(done)
         run = self.store.get_run(run["id"])
         self.assertEqual(run["state"]["phase"], "synthesize")
         synth = self.store.list_tasks(run_id=run["id"], status="queued")
         self.assertEqual(len(synth), 1)
         self.assertEqual(synth[0]["agent"], "a")
-        self.assertIn("レビュー by b", synth[0]["prompt"])
-        self._finish_all(run["id"], "final")
+        self.assertIn("回答 B", synth[0]["prompt"])
+        self.assertIn("レビュー 1", synth[0]["prompt"])
+        self.assertNotIn("レビュー by", synth[0]["prompt"])
+        self._finish_all(run["id"], 'final\n```json\n{"adopted": ["B"]}\n```')
         run = self.store.get_run(run["id"])
         self.assertEqual(run["status"], "done")
         self.assertIn("final", run["summary"])
+        res = run["state"]["results"]
+        self.assertEqual(res["b"]["avg"], 7.0)
+        self.assertEqual(res["b"]["best"], 2)
+        self.assertTrue(res["b"]["adopted"])
+        self.assertEqual(res["a"]["avg"], 4.0)
+        board = league.leaderboard([run])
+        self.assertEqual(board["b"]["all"]["adopted"], 1)
+        self.assertEqual(board["b"][run["state"]["category"]]["best"], 2)
+        rec = league.recommend(board, run["state"]["category"], [{"name": n, "kind": "claude" if n == "a" else "codex"} for n in "abc"], 2)
+        self.assertEqual(rec["solvers"][0], "b")
 
     def test_review_panel_fails_with_one_solver(self):
         run = self.orch.start("review_panel", "p", "t", {"prompt": "Q?", "solvers": ["a", "b"]})
@@ -66,6 +87,16 @@ class StoreRecipeTest(unittest.TestCase):
         self.assertEqual(t["title"], "t1")
         self.assertEqual(t["status"], "running")
         self.assertIsNone(self.store.claim_next(["b"], "w"))
+
+
+class LeagueParseTest(unittest.TestCase):
+    def test_parse_scores_and_category(self):
+        self.assertEqual(league.parse_scores('x ```json\n{"scores": {"a": 8, "C": "6"}, "best": "c"}\n```')["best"], "C")
+        self.assertEqual(league.parse_scores('{"scores": {"B": 11}}')["scores"], {"B": 10.0})
+        self.assertIsNone(league.parse_scores("no json here"))
+        self.assertEqual(league.parse_category("カテゴリ: robotics\n..."), "robotics")
+        self.assertEqual(league.parse_adopted('```json {"adopted": "b"} ```'), ["B"])
+        self.assertEqual(league.guess_category("ROS の launch が落ちる"), "robotics")
 
 
 class ReaperTest(unittest.TestCase):

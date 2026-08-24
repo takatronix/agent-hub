@@ -8,6 +8,7 @@ import time
 from typing import Any, Callable
 
 from .client import HubClient
+from . import league
 from .util import load_dotenv, truncate
 
 INSTRUCTIONS = (
@@ -112,6 +113,14 @@ def t_list_runs(a: dict[str, Any]) -> Any:
     return [{"id": r["id"], "title": r["title"], "recipe": r["recipe"], "status": r["status"], "created_at": r["created_at"], "url": _url(f"/runs/{r['id']}")} for r in runs]
 
 
+def t_recommend_agents(a: dict[str, Any]) -> Any:
+    return _client().post("/api/recommend", {"prompt": a.get("prompt", ""), "category": a.get("category"), "k": a.get("k", 3)})["recommend"]
+
+
+def t_leaderboard(a: dict[str, Any]) -> Any:
+    return _client().get("/api/leaderboard")["leaderboard"]
+
+
 AGENT_ARR = {"type": "array", "items": {"type": "string"}}
 TOOLS: list[tuple[str, str, dict[str, Any], Callable[[dict[str, Any]], Any]]] = [
     ("list_agents", "List agents currently online on the hub (name, kind, host).",
@@ -137,6 +146,10 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable[[dict[str, Any]], Any]]] = 
      {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}, "timeout": {"type": "number"}}}, t_wait_run),
     ("get_task_transcript", "Read the transcript (assistant text, tool calls, result) of one task.",
      {"type": "object", "required": ["task_id"], "properties": {"task_id": {"type": "string"}, "roles": AGENT_ARR}}, t_get_task_transcript),
+    ("recommend_agents", "Casting: pick the best solvers + synthesizer for a prompt from the anonymous-review leaderboard (vendor-diverse). Use before review_panel.",
+     {"type": "object", "properties": {"prompt": {"type": "string"}, "category": {"type": "string", "enum": league.CATEGORIES}, "k": {"type": "integer"}}}, t_recommend_agents),
+    ("leaderboard", "Per-agent, per-category scores from anonymous reviews (avg score, times judged best, times adopted).",
+     {"type": "object", "properties": {}}, t_leaderboard),
     ("list_runs", "List recent runs.", {"type": "object", "properties": {"project": {"type": "string"}, "limit": {"type": "integer"}}}, t_list_runs),
 ]
 

@@ -69,13 +69,34 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
     env = _env(cfg.get("env"))
     env.pop("CLAUDECODE", None)  # allow nesting when the runner itself was started from Claude Code
     proc = _spawn(cmd, workdir, env, stdin_text=prompt)
-    assert proc.stdin and proc.stdout
+    assert proc.stdin
     proc.stdin.write(prompt)
     proc.stdin.close()
+    yield {"role": "system", "content": f"$ {shlex.join(cmd)}", "data": {"cwd": workdir}}
+    yield from _claude_like_events(proc, res)
+
+
+def run_cursor(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterResult) -> Iterator[dict[str, Any]]:
+    """Cursor CLI (cursor-agent): same stream-json event shape as Claude Code."""
+    cmd = [cfg.get("bin", "cursor-agent"), "-p", "--output-format", "stream-json"]
+    if cfg.get("model"):
+        cmd += ["--model", cfg["model"]]
+    if cfg.get("force", True):
+        cmd += ["--force"]
+    cmd += list(cfg.get("args") or [])
+    cmd += [prompt]
+    env = _env(cfg.get("env"))
+    proc = _spawn(cmd, workdir, env)
+    yield {"role": "system", "content": f"$ {shlex.join(cmd[:-1])} <prompt>", "data": {"cwd": workdir}}
+    yield from _claude_like_events(proc, res)
+
+
+def _claude_like_events(proc: subprocess.Popen, res: AdapterResult) -> Iterator[dict[str, Any]]:
+    assert proc.stdout
     errs: list[str] = []
     _pump_stderr(proc, errs)
-    yield {"role": "system", "content": f"$ {shlex.join(cmd)}", "data": {"cwd": workdir}}
     last_text = ""
+    thinking: list[str] = []
     for line in proc.stdout:
         line = line.strip()
         if not line:
@@ -91,6 +112,12 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
             if ev.get("subtype") == "init":  # other system events (hooks, status) are noise for the transcript
                 yield {"role": "system", "content": f"session {ev.get('session_id','')} model={ev.get('model','')}",
                        "data": {k: ev.get(k) for k in ("model", "cwd", "permissionMode") if k in ev}}
+        elif t == "thinking":  # cursor-agent streams thinking deltas
+            if ev.get("subtype") == "delta" and ev.get("text"):
+                thinking.append(ev["text"])
+            elif ev.get("subtype") == "completed" and thinking:
+                yield {"role": "thinking", "content": "".join(thinking), "data": {}}
+                thinking = []
         elif t == "assistant":
             for block in (ev.get("message") or {}).get("content") or []:
                 bt = block.get("type")
@@ -110,14 +137,27 @@ def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: Adapt
                         content = "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
                     yield {"role": "tool_result", "content": str(content or ""),
                            "data": {"tool_use_id": block.get("tool_use_id"), "is_error": block.get("is_error", False)}}
+        elif t == "tool_call":  # cursor-agent tool events
+            sub = ev.get("subtype")
+            call = ev.get("tool_call") or {}
+            name = next(iter(call.keys()), "tool") if isinstance(call, dict) else "tool"
+            args = call.get(name, {}).get("args") if isinstance(call, dict) else None
+            if sub == "started":
+                yield {"role": "tool_use", "content": _tool_summary(name, args), "data": {"name": name, "input": args}}
+            elif sub == "completed":
+                result = call.get(name, {}).get("result") if isinstance(call, dict) else None
+                yield {"role": "tool_result", "content": json.dumps(result, ensure_ascii=False)[:8000] if result is not None else "",
+                       "data": {"name": name}}
         elif t == "result":
-            res.final = ev.get("result") or res.final
+            res.final = ev.get("result") or res.final or last_text
             res.usage = {k: ev.get(k) for k in ("total_cost_usd", "duration_ms", "num_turns", "usage") if k in ev}
             res.session_id = ev.get("session_id") or res.session_id
             data = {**res.usage, "is_error": ev.get("is_error", False), "subtype": ev.get("subtype")}
             # the final text was already shown as the last assistant message; don't repeat it
             yield {"role": "result", "content": "" if res.final == last_text else res.final, "data": data}
     res.exit_code = proc.wait()
+    if not res.final:
+        res.final = last_text
     if errs:
         yield {"role": "stderr", "content": "\n".join(errs[-60:]), "data": {}}
 
@@ -468,7 +508,7 @@ def loads_safe(text: str) -> Any:
         return text
 
 
-ADAPTERS = {"claude": run_claude, "codex": run_codex, "kimi": run_kimi, "command": run_command, "api": run_api, "fake": run_fake}
+ADAPTERS = {"claude": run_claude, "cursor": run_cursor, "codex": run_codex, "kimi": run_kimi, "command": run_command, "api": run_api, "fake": run_fake}
 
 
 def _tool_summary(name: Any, inp: Any) -> str:

@@ -10,7 +10,7 @@ INDEX_HTML = r"""<!doctype html>
 <style>
 :root{--bg:#0b0d12;--bg2:#12151c;--card:#161a23;--card2:#1c212c;--line:#262c39;--fg:#e8ebf1;--mut:#8b93a5;--dim:#5c6478;
  --acc:#5b8cff;--acc2:#8b5cf6;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
- --claude:#f97316;--codex:#14b8a6;--api:#a78bfa;--kimi:#ec4899;--command:#38bdf8;--fake:#6b7280;--hub:#94a3b8;
+ --claude:#f97316;--codex:#14b8a6;--api:#a78bfa;--kimi:#ec4899;--command:#38bdf8;--cursor:#e2e8f0;--fake:#6b7280;--hub:#94a3b8;
  --r:16px;--sans:"Inter","Noto Sans JP",-apple-system,"Hiragino Sans",system-ui,sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace}
 :root[data-theme="light"]{--bg:#f4f6fb;--bg2:#ffffff;--card:#ffffff;--card2:#f1f4fa;--line:#e2e6ef;--fg:#141824;--mut:#606a7e;--dim:#9aa3b5}
 .theme{cursor:pointer;font-size:15px;opacity:.7;transition:.2s;user-select:none}.theme:hover{opacity:1;transform:rotate(20deg)}
@@ -48,8 +48,8 @@ button.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)
 .av{width:32px;height:32px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#fff;flex:none;position:relative;box-shadow:inset 0 -6px 12px rgba(0,0,0,.25)}
 .ag .nm{font-weight:600;font-size:13px;line-height:1.25}.ag .ds{font-size:11px;color:var(--mut)}.ag .chk{margin-left:auto;font-size:12px;color:var(--acc);font-weight:700;animation:pop .3s both}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;margin-left:auto;flex:none}.dot.on{background:var(--ok)}.dot.busy{background:var(--warn);animation:beat 1.2s infinite}
-.c-claude{background:var(--claude)}.c-codex{background:var(--codex)}.c-api{background:var(--api)}.c-kimi{background:var(--kimi)}.c-command{background:var(--command)}.c-fake{background:var(--fake)}.c-hub{background:var(--hub)}
-.t-claude{color:var(--claude)}.t-codex{color:var(--codex)}.t-api{color:var(--api)}.t-kimi{color:var(--kimi)}.t-command{color:var(--command)}.t-fake{color:var(--fake)}.t-hub{color:var(--hub)}
+.c-claude{background:var(--claude)}.c-codex{background:var(--codex)}.c-api{background:var(--api)}.c-kimi{background:var(--kimi)}.c-command{background:var(--command)}.c-cursor{background:var(--cursor);color:#111}.c-fake{background:var(--fake)}.c-hub{background:var(--hub)}
+.t-claude{color:var(--claude)}.t-codex{color:var(--codex)}.t-api{color:var(--api)}.t-kimi{color:var(--kimi)}.t-command{color:var(--command)}.t-cursor{color:var(--cursor)}.t-fake{color:var(--fake)}.t-hub{color:var(--hub)}
 @media(max-width:980px){aside .card{padding:12px}#agents{display:flex;gap:12px;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x mandatory}.host{min-width:240px;scroll-snap-align:start;flex:none}}
 /* recipes */
 .recipes{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.rc{border:1px solid var(--line);border-radius:14px;padding:12px 14px;cursor:pointer;background:var(--bg2);transition:.18s}.rc:hover{border-color:var(--dim);transform:translateY(-1px)}.rc.sel{border-color:var(--acc);background:rgba(91,140,255,.09);box-shadow:0 0 0 3px rgba(91,140,255,.12)}.rc b{display:block;margin-bottom:3px}.rc span{font-size:12px;color:var(--mut)}
@@ -100,11 +100,11 @@ if(TOKEN&&!location.search.includes('token='))history.replaceState({},'',locatio
 const go=p=>{history.pushState({},'',p+Q);route()};
 const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),2600)};
 const api=async(p,body)=>{const h={'Content-Type':'application/json'};if(TOKEN)h['Authorization']='Bearer '+TOKEN;const r=await fetch(p,{method:body?'POST':'GET',headers:h,body:body?JSON.stringify(body):undefined});const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j};
-const KIND={claude:['Claude Code','ファイル・コマンド OK'],codex:['Codex CLI','ファイル・コマンド OK'],command:['CLI','ファイル・コマンド OK'],kimi:['Kimi CLI','ファイル・コマンド OK'],api:['API / ローカル LLM','テキストのみ'],fake:['ダミー','配線テスト用'],hub:['hub','']};
+const KIND={claude:['Claude Code','ファイル・コマンド OK'],codex:['Codex CLI','ファイル・コマンド OK'],command:['CLI','ファイル・コマンド OK'],cursor:['Cursor CLI','ファイル・コマンド OK'],kimi:['Kimi CLI','ファイル・コマンド OK'],api:['API / ローカル LLM','テキストのみ'],fake:['ダミー','配線テスト用'],hub:['hub','']};
 const RECIPES=[['review_panel','三者評価','全員が独立に解く → 互いにレビュー → 統合役がまとめる'],['parallel','並列','同じ課題を全員に投げて回答を並べる'],['single','単独','1人に1つ頼む']];
 const PHASES={review_panel:[['solve','解く','全員が独立に回答'],['review','相互レビュー','他人の回答を批評'],['synthesize','統合','最終回答をまとめる']],parallel:[['run','実行','全員が回答']],single:[['run','実行','']]};
-const kindOf=n=>{const a=agents.find(x=>x.name===n);if(a)return a.kind;if(n==='hub')return'hub';for(const k of['claude','codex','kimi','qwen','fake'])if(n.startsWith(k))return k==='qwen'?'api':k;return'command'};
-const initials=n=>({claude:'C',codex:'X',api:'A',kimi:'K',command:'T',fake:'F',hub:'H'}[kindOf(n)]||'?');
+const kindOf=n=>{const a=agents.find(x=>x.name===n);if(a)return a.kind;if(n==='hub')return'hub';for(const k of['claude','codex','kimi','cursor','qwen','grok','fake'])if(n.startsWith(k))return (k==='qwen'||k==='grok')?'api':k;return'command'};
+const initials=n=>({claude:'C',codex:'X',api:'A',kimi:'K',cursor:'U',command:'T',fake:'F',hub:'H'}[kindOf(n)]||'?');
 const av=(n,cls='')=>`<span class="av c-${kindOf(n)} ${cls}" title="${esc(n)}">${initials(n)}</span>`;
 const fmtTs=t=>t?t.slice(11,19):'';const fmtDt=t=>t?t.replace('T',' ').slice(5,16):'';const pill=s=>`<span class="pill ${s}">${({done:'完了',failed:'失敗',cancelled:'中止',running:'実行中',queued:'待機'}[s]||s)}</span>`;
 let agents=[],es=null;

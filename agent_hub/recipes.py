@@ -11,6 +11,7 @@ from typing import Any
 
 from .store import Store
 from .util import truncate
+from . import league
 
 SOLVE_PROMPT = """あなたは「{agent}」として、次の課題に独立して取り組みます。他のエージェントも同じ課題に並行して取り組んでいます。
 
@@ -18,36 +19,41 @@ SOLVE_PROMPT = """あなたは「{agent}」として、次の課題に独立し�
 {prompt}
 
 # 出力ルール
+- 最初の行に `カテゴリ: <algorithm|robotics|debugging|design|docs|math|data|web|infra|other>` と課題の種類を 1 つ書いてください。
 - 最後に必ず「## 結論」見出しを置き、あなたの回答・解決策・変更内容・検証結果を自己完結でまとめてください（他のエージェントがこの「結論」だけを読んでレビューします）。
 - 不確かな点・リスク・未検証の箇所は正直に書いてください。
 """
 
-REVIEW_PROMPT = """あなたは「{agent}」として、他のエージェントの回答をレビューします。元の課題は以下です。
+REVIEW_PROMPT = """あなたは「{agent}」として、他のエージェントの回答を匿名審査します。元の課題は以下です。
+回答者が誰か（どの AI か）は伏せられています。内容だけで公平に評価してください。
 
 # 課題
 {prompt}
 
-# あなた自身の回答（参考）
+# あなた自身の回答（参考。採点対象外）
 {own}
 
-# レビュー対象
+# 審査対象
 {others}
 
 # 出力ルール
-各回答について、以下を書いてください:
-- 正しさ: 事実誤認・論理の穴・バグ・見落とし（具体的に、該当箇所を引用して）
-- 自分の回答との差分: 相手の方が優れている点／劣っている点
+各回答について:
+- 正しさ: 事実誤認・論理の穴・バグ・見落とし（該当箇所を引用して具体的に）
+- あなたの回答との差分: 相手の方が優れている点／劣っている点
 - スコア: 1〜10（根拠つき）
-最後に「## 総評」として、どの回答を採用・統合すべきかの推奨を書いてください。
 コードを実際に動かして検証できるなら、して構いません（作業ディレクトリ内のみ）。
+最後に「## 総評」を書き、その直後に必ず次の形式の JSON を 1 つだけ出してください（キーは回答の記号）:
+```json
+{{"scores": {{{score_keys}}}, "best": "A"}}
+```
 """
 
-SYNTH_PROMPT = """あなたは「{agent}」として、複数エージェントの回答とその相互レビューをすべて読み、最終回答を作ります。
+SYNTH_PROMPT = """あなたは「{agent}」として、複数の匿名回答とその相互レビュー（採点つき）をすべて読み、最終回答を作ります。
 
 # 課題
 {prompt}
 
-# 各エージェントの回答
+# 各回答（記号は匿名。誰の回答かは伏せられています）
 {solutions}
 
 # 相互レビュー
@@ -55,8 +61,9 @@ SYNTH_PROMPT = """あなたは「{agent}」として、複数エージェント�
 
 # 出力ルール
 - 「## 最終回答」: レビューで指摘された問題を取り込み、最良の要素を統合した最終的な回答・手順・コード。
-- 「## 判断の根拠」: どの意見を採用し、どれを退けたか、なぜか。
+- 「## 判断の根拠」: どの回答を採用し、どれを退けたか、なぜか（記号で）。
 - 「## 残る不確実性」: 人間が確認すべき点。
+- 最後に必ず JSON を 1 つ: ```json {{"adopted": ["A", "C"]}} ```（主に採用した回答の記号。複数可）
 """
 
 
@@ -150,9 +157,12 @@ class Orchestrator:
             "reviewers": list(spec.get("reviewers") or solvers),
             "synthesizer": spec.get("synthesizer") or solvers[0],
         }
-        run = self.store.create_run(project, title, "review_panel", spec, created_by, state={"phase": "solve"})
+        aliases = league.make_aliases(solvers)
+        state = {"phase": "solve", "aliases": aliases, "category": spec.get("category") or league.guess_category(spec["prompt"])}
+        run = self.store.create_run(project, title, "review_panel", spec, created_by, state=state)
         self.store.add_message(actor="hub", role="system", run_id=run["id"],
-                               content=f"三者評価を開始: solvers={solvers} reviewers={spec['reviewers']} synthesizer={spec['synthesizer']}")
+                               content=f"匿名審査を開始: solvers={solvers} reviewers={spec['reviewers']} synthesizer={spec['synthesizer']} "
+                                       f"category={state['category']} (記号: {', '.join(f'{k}={v}' for k, v in aliases.items())})")
         for agent in solvers:
             self.store.create_task(project, f"解く [{agent}]", SOLVE_PROMPT.format(agent=agent, prompt=spec["prompt"]),
                                    agent, run_id=run["id"], step="solve", workdir=spec.get("workdir"), meta=_meta(spec, agent))
@@ -170,19 +180,25 @@ class Orchestrator:
             if len(solved) < 2:
                 self._fail(run, "2つ以上の回答が得られなかったためレビューを中止")
                 return
-            self.store.update_run(run["id"], state={**state, "phase": "review"})
+            votes = [c for c in (league.parse_category(t.get("result") or "") for t in solved) if c]
+            category = max(set(votes), key=votes.count) if votes else state.get("category", "other")
+            state = {**state, "phase": "review", "category": category}
+            self.store.update_run(run["id"], state=state)
             self.store.add_message(actor="hub", role="system", run_id=run["id"],
-                                   content=f"解答フェーズ完了 ({len(solved)}/{len(by_step['solve'])} 成功)。相互レビューを開始。")
+                                   content=f"解答フェーズ完了 ({len(solved)}/{len(by_step['solve'])} 成功)。カテゴリ={category}。匿名で相互レビューを開始。")
+            aliases = state.get("aliases") or league.make_aliases([t["agent"] for t in solved])
+            letter_of = {v: k for k, v in aliases.items()}
             own_by_agent = {t["agent"]: t for t in by_step["solve"]}
             for reviewer in spec["reviewers"]:
                 own = own_by_agent.get(reviewer)
                 others = [t for t in solved if t["agent"] != reviewer]
                 if not others:
                     continue
+                keys = ", ".join(f'"{letter_of.get(t["agent"], "?")}": <1-10>' for t in others)
                 prompt = REVIEW_PROMPT.format(
-                    agent=reviewer, prompt=spec["prompt"],
+                    agent=reviewer, prompt=spec["prompt"], score_keys=keys,
                     own=_result(own) if own else "(あなたは解答フェーズに参加していません)",
-                    others="\n\n".join(f"## 回答 by {_label(t)}\n{_result(t)}" for t in others),
+                    others="\n\n".join(f"## 回答 {letter_of.get(t['agent'], '?')}\n{_result(t)}" for t in others),
                 )
                 self.store.create_task(run["project"], f"レビュー [{reviewer}]", prompt, reviewer,
                                        run_id=run["id"], step="review", workdir=spec.get("workdir"), meta=_meta(spec, reviewer))
@@ -191,13 +207,20 @@ class Orchestrator:
         if phase == "review":
             solved = [t for t in by_step.get("solve", []) if t["status"] == "done"]
             reviews = [t for t in by_step.get("review", []) if t["status"] == "done"]
+            aliases = state.get("aliases") or {}
+            letter_of = {v: k for k, v in aliases.items()}
+            for t in reviews:
+                parsed = league.parse_scores(t.get("result") or "")
+                if parsed:
+                    self.store.finish_task(t["id"], "done", result=t["result"], meta_update={"review": parsed})
+            scored = sum(1 for t in reviews if league.parse_scores(t.get("result") or ""))
             self.store.update_run(run["id"], state={**state, "phase": "synthesize"})
             self.store.add_message(actor="hub", role="system", run_id=run["id"],
-                                   content=f"レビューフェーズ完了 ({len(reviews)} 件)。{spec['synthesizer']} が統合します。")
+                                   content=f"レビューフェーズ完了 ({len(reviews)} 件、採点 JSON 取得 {scored} 件)。{spec['synthesizer']} が統合します。")
             prompt = SYNTH_PROMPT.format(
                 agent=spec["synthesizer"], prompt=spec["prompt"],
-                solutions="\n\n".join(f"## 回答 by {_label(t)}\n{_result(t, 16000)}" for t in solved),
-                reviews="\n\n".join(f"## レビュー by {_label(t)}\n{_result(t, 12000)}" for t in reviews)
+                solutions="\n\n".join(f"## 回答 {letter_of.get(t['agent'], '?')}\n{_result(t, 16000)}" for t in solved),
+                reviews="\n\n".join(f"## レビュー {i + 1}（審査員も匿名）\n{_result(t, 12000)}" for i, t in enumerate(reviews))
                 or "(レビューなし)",
             )
             self.store.create_task(run["project"], f"統合 [{spec['synthesizer']}]", prompt, spec["synthesizer"],
@@ -208,8 +231,13 @@ class Orchestrator:
             synth = by_step.get("synthesize", [])
             t = synth[0] if synth else None
             if t and t["status"] == "done":
-                self.store.update_run(run["id"], status="done", summary=t["result"] or "", state={**state, "phase": "finished"})
-                self.store.add_message(actor="hub", role="system", run_id=run["id"], content="三者評価 完了。")
+                results = league.tally({**run, "state": state}, tasks)
+                self.store.update_run(run["id"], status="done", summary=t["result"] or "",
+                                      state={**state, "phase": "finished", "results": results})
+                board = ", ".join(f"{a}: {d['avg'] if d['avg'] is not None else '-'}点/{d['n']}件"
+                                  f"{' ★最良' + str(d['best']) if d['best'] else ''}{' ✔採用' if d['adopted'] else ''}"
+                                  for a, d in results.items())
+                self.store.add_message(actor="hub", role="system", run_id=run["id"], content=f"匿名審査 完了。成績: {board}")
             else:
                 self._fail(run, f"統合に失敗: {t.get('error') if t else 'no task'}")
 
