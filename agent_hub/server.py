@@ -8,6 +8,7 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -28,7 +29,7 @@ class ApiError(Exception):
 class Hub:
     """Shared state for all request handler threads."""
 
-    def __init__(self, store: Store, token: str | None, read_token: str | None):
+    def __init__(self, store: Store, token: str | None, read_token: str | None, reaper: bool = True):
         self.store = store
         self.token = token or None
         self.read_token = read_token or None
@@ -36,6 +37,44 @@ class Hub:
         self.subscribers: list[tuple[str | None, queue.Queue]] = []
         self.wakeup = threading.Condition()
         store.listeners.append(self._on_event)
+        if reaper:
+            threading.Thread(target=self._reaper, daemon=True, name="reaper").start()
+
+    def reap_lost_tasks(self, agent_grace: float = 120.0, offline_after: float = 600.0) -> list[str]:
+        """A running task is 'lost' when its agent heartbeats as idle on something else, or has been
+        offline for a long time (runner restart, hub restart mid-claim, machine reboot)."""
+        lost = []
+        now = time.time()
+        for task in self.store.list_tasks(status="running", limit=500):
+            agent = self.store.get_agent(task["agent"])
+            started = task.get("started_at") or ""
+            try:
+                age = now - datetime.fromisoformat(started.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                age = 0
+            if age < agent_grace:
+                continue
+            reason = None
+            if agent is None or now - agent["last_seen"] > offline_after:
+                reason = "agent offline"
+            elif now - agent["last_seen"] < agent_grace and agent["status"] == "idle" and agent.get("current_task") != task["id"]:
+                reason = "agent idle without this task"
+            if reason:
+                t = self.store.requeue_task(task["id"], reason)
+                self.store.add_message(actor="hub", role="system", task_id=task["id"], run_id=task.get("run_id"),
+                                       content=f"タスクを回収: {reason} → {t['status']}")
+                if t["status"] == "failed":
+                    self.orch.on_task_finished(t)
+                lost.append(task["id"])
+        return lost
+
+    def _reaper(self) -> None:
+        while True:
+            time.sleep(60)
+            try:
+                self.reap_lost_tasks()
+            except Exception as e:  # noqa: BLE001
+                print(f"reaper error: {e}", flush=True)
 
     def _on_event(self, event: dict[str, Any]) -> None:
         run_id = None

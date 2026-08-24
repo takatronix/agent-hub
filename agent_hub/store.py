@@ -323,6 +323,25 @@ class Store:
         self.emit("task", {"task": task})
         return task
 
+    def requeue_task(self, task_id: str, reason: str) -> dict[str, Any]:
+        """Put a running task back in the queue (or fail it if it was already retried once)."""
+        with self._lock:
+            task = self.get_task(task_id)
+            if not task or task["status"] != "running":
+                return task
+            retries = int(task["meta"].get("retries", 0))
+            meta = {**task["meta"], "retries": retries + 1, "last_reason": reason}
+            ts = now_iso()
+            if retries >= 1:
+                self._conn.execute("UPDATE tasks SET status='failed', error=?, meta=?, finished_at=?, updated_at=? WHERE id=?",
+                                   (f"lost twice: {reason}", dumps(meta), ts, ts, task_id))
+            else:
+                self._conn.execute("UPDATE tasks SET status='queued', claimed_by=NULL, started_at=NULL, meta=?, updated_at=? WHERE id=?",
+                                   (dumps(meta), ts, task_id))
+            task = self.get_task(task_id)
+        self.emit("task", {"task": task})
+        return task
+
     def cancel_queued(self, run_id: str) -> int:
         with self._lock:
             cur = self._conn.execute(

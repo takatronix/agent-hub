@@ -86,13 +86,13 @@ class AgentWorker(threading.Thread):
                 last_hb = time.time()
 
     def _finish(self, task_id: str, status: str, result: str | None = None, error: str | None = None, meta: dict | None = None) -> None:
-        for attempt in range(5):
+        for attempt in range(60):  # ~10 minutes: the hub may be restarting
             try:
                 self.client.post(f"/api/tasks/{task_id}/finish", {"status": status, "result": result, "error": error, "meta": meta or {}})
                 return
             except Exception as e:  # noqa: BLE001
                 log(f"[{self.name_}] finish failed ({attempt}): {e}")
-                time.sleep(2 * (attempt + 1))
+                time.sleep(min(10, 2 * (attempt + 1)))
 
     def execute(self, task: dict[str, Any]) -> None:
         adapter = ADAPTERS[self.kind]

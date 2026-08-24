@@ -68,13 +68,31 @@ class StoreRecipeTest(unittest.TestCase):
         self.assertIsNone(self.store.claim_next(["b"], "w"))
 
 
+class ReaperTest(unittest.TestCase):
+    def test_lost_task_is_requeued_then_failed(self):
+        tmp = tempfile.TemporaryDirectory()
+        store = Store(Path(tmp.name) / "t.sqlite3")
+        hub = Hub(store, None, None, reaper=False)
+        store.heartbeat("a", "fake", status="idle")
+        t = store.create_task("p", "t", "prompt", "a")
+        store.claim_next(["a"], "a@x")
+        # not old enough yet
+        self.assertEqual(hub.reap_lost_tasks(agent_grace=120), [])
+        self.assertEqual(hub.reap_lost_tasks(agent_grace=0), [t["id"]])
+        self.assertEqual(store.get_task(t["id"])["status"], "queued")
+        store.claim_next(["a"], "a@x")
+        self.assertEqual(hub.reap_lost_tasks(agent_grace=0), [t["id"]])
+        self.assertEqual(store.get_task(t["id"])["status"], "failed")
+        tmp.cleanup()
+
+
 class EndToEndTest(unittest.TestCase):
     """Real HTTP server + real runner threads with fake adapters."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         store = Store(Path(self.tmp.name) / "t.sqlite3")
-        self.hub = Hub(store, token="secret", read_token="ro")
+        self.hub = Hub(store, token="secret", read_token="ro", reaper=False)
         self.srv = make_server("127.0.0.1", 0, self.hub)
         self.port = self.srv.server_address[1]
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
