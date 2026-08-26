@@ -123,7 +123,7 @@ function md(src){let t=esc(src||'');const blocks=[];t=t.replace(/```([\w+-]*)\n(
  if(list)out.push(`</${list}>`);return out.join('\n').replace(/\uE000(\d+)\uE000/g,(m,i)=>blocks[+i])}
 /* ---------------- home ---------------- */
 let selected=[],recipe='review_panel',models={};
-const MODELS={claude:['','opus','fable','sonnet','haiku'],codex:['','gpt-5.5','gpt-5.5-codex','o4-mini'],api:['']};
+const MODELS={claude:['','opus','fable','sonnet','haiku'],codex:['','gpt-5.6-sol','gpt-5.5'],api:['']};
 function modelSel(n){const k=kindOf(n);const opts=MODELS[k];if(!opts||opts.length<2)return'';const a=agents.find(x=>x.name===n);const def=(a&&a.meta&&a.meta.model)||'既定';return`<select class="msel" title="この run で使うモデル（既定: ${def}）" onclick="event.stopPropagation()" onchange="models['${n}']=this.value||undefined;updateForm()" style="width:auto;padding:2px 6px;border-radius:8px;font-size:11px;background:var(--bg2);border:1px solid var(--line);color:${models[n]?'var(--acc)':'var(--mut)'}">${opts.map(o=>`<option value="${o}" ${(models[n]||'')===o?'selected':''}>${o||def}</option>`).join('')}</select>`}
 async function showHome(){runsKey='';agentsKey='';$('#crumb').textContent='';const [a,r]=await Promise.all([api('/api/agents'),api('/api/runs?limit=100')]);agents=a.agents;selected=selected.filter(n=>agents.some(x=>x.name===n&&x.online));
  $('#app').innerHTML=`<div class="grid">
