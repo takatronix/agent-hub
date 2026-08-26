@@ -78,6 +78,24 @@ class ServerFixesTest(unittest.TestCase):
         self.assertTrue(json.loads(r2.read())["ok"])
         conn.close()
 
+    def test_notify_policy_on_report_requires_notify_true(self):
+        """on_report must fire only when the summary declares {"notify": true} — not for
+        {"notify": false} (parse_json_block returns the whole dict, which is truthy)."""
+        sent = []
+        self.hub.notifier.emit = lambda run: sent.append(run["id"])
+
+        def ev(rid, status, spec, summary=""):
+            self.hub._notify_status.pop(rid, None)
+            self.hub._on_event({"event": "run", "run": {"id": rid, "status": status, "spec": spec, "summary": summary}})
+
+        ev("r1", "done", {"notify": "on_report"}, 'x ```json {"notify": false} ```')
+        ev("r2", "done", {"notify": "on_report"}, 'x ```json {"notify": true, "summary": "3件"} ```')
+        ev("r3", "done", {"notify": "on_report"}, "no json at all")
+        ev("r4", "done", {"notify": "always"}, "")
+        ev("r5", "failed", {"notify": "on_failure"}, "")
+        ev("r6", "done", {"notify": "on_failure"}, "")  # done under on_failure -> silent
+        self.assertEqual(sent, ["r2", "r4", "r5"])
+
 
 if __name__ == "__main__":
     unittest.main()

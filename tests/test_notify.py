@@ -42,12 +42,43 @@ class NotifyTest(unittest.TestCase):
 
         self.assertEqual(captured["url"], "https://ntfy.sh/mytopic")
         self.assertEqual(captured["method"], "POST")
-        # body is summary truncated to 200 chars
-        self.assertEqual(captured["data"], ("everything green " * 40)[:200].encode("utf-8"))
+        # body carries the title (first line) + summary, so a non-latin title still notifies
+        body = captured["data"].decode("utf-8")
+        self.assertTrue(body.startswith("Nightly build\neverything green"))
         headers = {k.lower(): v for k, v in captured["headers"].items()}
-        self.assertEqual(headers["title"], "Nightly build")
+        self.assertEqual(headers["title"], "Nightly build")  # ascii title also set as header
         self.assertEqual(headers["tags"], "white_check_mark")
         self.assertEqual(headers["click"], "http://hub.local/runs/run_abc")
+
+    def test_japanese_title_goes_in_body_not_header(self):
+        """Regression: a Japanese title in the latin-1 Title header used to raise
+        UnicodeEncodeError and silently drop every notification in a Japanese UI."""
+        captured = {}
+
+        class FakeResp:
+            def close(self):
+                pass
+
+        def fake_urlopen(req, timeout=None):
+            captured["data"] = req.data
+            captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+            return FakeResp()
+
+        orig = notify.urllib.request.urlopen
+        notify.urllib.request.urlopen = fake_urlopen
+        try:
+            n = Notifier(public_url="", ntfy_url="https://ntfy.sh/t")
+            n.emit({"id": "r1", "status": "done", "title": "メール整理", "summary": "要対応3件"})
+            for _ in range(100):
+                if captured:
+                    break
+                time.sleep(0.02)
+        finally:
+            notify.urllib.request.urlopen = orig
+
+        # must have sent without error, no latin-1-incompatible Title header
+        self.assertNotIn("title", captured["headers"])
+        self.assertIn("メール整理", captured["data"].decode("utf-8"))
 
     def test_failed_tag_and_fallback_body(self):
         captured = {}
@@ -74,7 +105,7 @@ class NotifyTest(unittest.TestCase):
             notify.urllib.request.urlopen = orig
 
         self.assertEqual(captured["headers"]["tags"], "x")
-        self.assertEqual(captured["data"], b"run failed")
+        self.assertEqual(captured["data"], b"job")  # no summary -> body falls back to the title
         self.assertNotIn("click", captured["headers"])  # no public_url -> no Click
 
 

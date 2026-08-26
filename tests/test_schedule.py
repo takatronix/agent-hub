@@ -167,6 +167,31 @@ class ScheduleHttpTest(unittest.TestCase):
         self.assertTrue(body["deleted"])
         self.assertEqual(self.client.get("/api/schedules")["schedules"], [])
 
+    def test_create_validates_input(self):
+        # unknown recipe / non-positive interval / non-object spec / bad notify -> 400 (not stored)
+        for bad in ({"title": "x", "recipe": "nope", "interval_sec": 60},
+                    {"title": "x", "recipe": "single", "interval_sec": 0},
+                    {"title": "x", "recipe": "single", "interval_sec": -5},
+                    {"title": "x", "recipe": "single", "interval_sec": 60, "spec": "notadict"},
+                    {"title": "x", "recipe": "single", "interval_sec": 60, "notify": "whenever"}):
+            code, _ = self._status("POST", "/api/schedules", bad)
+            self.assertEqual(code, 400, bad)
+        self.assertEqual(self.client.get("/api/schedules")["schedules"], [])
+
+    def test_one_bad_schedule_does_not_skip_the_rest(self):
+        # A schedule whose recipe is unknown must not prevent a sibling due schedule from running.
+        st = self.hub.store
+        past = "2000-01-01T00:00:00.000Z"
+        bad = st.create_schedule("p", "bad", "single", 3600, spec={"prompt": "x", "agent": "fake-a"})
+        good = st.create_schedule("p", "good", "single", 3600, spec={"prompt": "y", "agent": "fake-a"})
+        # force both due and corrupt the first one's recipe directly in the DB
+        with st.lock:
+            st._conn.execute("UPDATE schedules SET next_at=?", (past,))
+            st._conn.execute("UPDATE schedules SET recipe='bogus' WHERE id=?", (bad["id"],))
+        self.hub._tick_schedules()
+        self.assertIsNone(st.get_schedule(bad["id"])["last_run_id"])       # bad one failed
+        self.assertIsNotNone(st.get_schedule(good["id"])["last_run_id"])   # good one still ran
+
 
 if __name__ == "__main__":
     unittest.main()

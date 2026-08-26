@@ -40,8 +40,17 @@ class Notifier:
     def _send(self, run: dict[str, Any]) -> None:
         status = run.get("status") or ""
         title = run.get("title") or "run"
-        body = (run.get("summary") or "")[:200] or f"run {status}"
-        headers = {"Title": title, "Tags": "white_check_mark" if status == "done" else "x"}
+        summary = (run.get("summary") or "").strip()
+        # HTTP header values are latin-1: a Japanese title in the Title header raises
+        # UnicodeEncodeError. Keep the title in the (UTF-8) body and only set the Title
+        # header when it is ASCII-safe, so non-latin titles still notify.
+        body = ((f"{title}\n{summary}" if summary else title) or f"run {status}")[:400]
+        headers = {"Tags": "white_check_mark" if status == "done" else "x"}
+        try:
+            title.encode("latin-1")
+            headers["Title"] = title
+        except UnicodeEncodeError:
+            pass
         if self.public_url and run.get("id"):
             headers["Click"] = f"{self.public_url}/runs/{run['id']}"
         req = urllib.request.Request(self.ntfy_url, data=body.encode("utf-8"), headers=headers, method="POST")

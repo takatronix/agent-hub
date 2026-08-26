@@ -108,7 +108,7 @@ const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('show');clea
 const api=async(p,body)=>{const h={'Content-Type':'application/json'};if(TOKEN)h['Authorization']='Bearer '+TOKEN;const r=await fetch(p,{method:body?'POST':'GET',headers:h,body:body?JSON.stringify(body):undefined});const j=await r.json();if(!r.ok)throw new Error(r.status===401&&body?'このトークンは閲覧専用です。書き込み用トークン（HUB_TOKEN）付きの URL で開き直してください':(j.error||r.status));return j};
 const KIND={claude:['Claude Code','ファイル・コマンド OK'],codex:['Codex CLI','ファイル・コマンド OK'],command:['CLI','ファイル・コマンド OK'],cursor:['Cursor CLI','ファイル・コマンド OK'],kimi:['Kimi CLI','ファイル・コマンド OK'],api:['API / ローカル LLM','テキストのみ'],fake:['ダミー','配線テスト用'],hub:['hub','']};
 const CAT_JA={algorithm:'アルゴリズム',robotics:'ロボット/ROS',debugging:'デバッグ',design:'設計',docs:'文書/仕様',math:'数理',data:'データ',web:'Web',infra:'インフラ',other:'その他'};
-const RECIPES=[['team','協力分担','分担を決めて並行作業 → 統合 → 全員レビュー → 仕上げ（チーム開発向け）'],['review_panel','三者評価','全員が同じ課題を独立に解く → 相互採点 → 統合（検証・答え合わせ向け）'],['parallel','並列＋採点','同じ課題を全員に投げて回答を並べ、匿名で相互採点'],['single','単独','1人に1つ頑む']];
+const RECIPES=[['team','協力分担','分担を決めて並行作業 → 統合 → 全員レビュー → 仕上げ（チーム開発向け）'],['review_panel','三者評価','全員が同じ課題を独立に解く → 相互採点 → 統合（検証・答え合わせ向け）'],['parallel','並列＋採点','同じ課題を全員に投げて回答を並べ、匿名で相互採点'],['single','単独','1人に1つ頼む']];
 const PHASES={team:[['plan','分担','リーダーが担当を割り当て'],['work','作業','各自の担当を並行作業'],['integrate','統合','1つの成果物に'],['review','レビュー','全員で採点・指摘'],['finalize','仕上げ','指摘を反映した最終版']],review_panel:[['plan','配役','AI が担当視点を割り当て'],['solve','解く','全員が独立に回答'],['review','相互レビュー','他人の回答を批評'],['synthesize','統合','最終回答をまとめる']],parallel:[['run','実行','全員が回答']],single:[['run','実行','']]};
 const kindOf=n=>{const a=agents.find(x=>x.name===n);if(a)return a.kind;if(n==='hub')return'hub';for(const k of['claude','codex','kimi','cursor','qwen','grok','fake'])if(n.startsWith(k))return (k==='qwen'||k==='grok')?'api':k;return'command'};
 const initials=n=>({claude:'C',codex:'X',api:'A',kimi:'K',cursor:'U',command:'T',fake:'F',hub:'H'}[kindOf(n)]||'?');
@@ -142,11 +142,11 @@ async function showHome(){runsKey='';agentsKey='';schedKey='';$('#crumb').textCo
  $('#app').innerHTML=`<div class="grid">
  <aside><div class="card"><h2>エージェント</h2><div class="sub">タップして参加者に追加</div><div id="agents"></div></div></aside>
  <section>
-  <div class="card"><h2>新しいミッション</h2><div class="sub">課題を書く → 誰に頑むか選ぶ → 開始。AI 同士のやりとりは全部記録されます</div>
+  <div class="card"><h2>新しいミッション</h2><div class="sub">課題を書く → 誰に頼むか選ぶ → 開始。AI 同士のやりとりは全部記録されます</div>
    <div class="step"><span class="n">1</span><h3>課題</h3><span>やってほしいこと</span></div>
    <textarea id="prompt" placeholder="例：/home/aspa1/aspa-navigation の localization が周期的に飛ぶ原因を特定し、修正案とテスト手順を示せ"></textarea>
    <div class="row" style="margin-top:8px"><input id="workdir" placeholder="作業ディレクトリ（実行マシン上のパス／ファイルを触らないなら空）"><input id="project" placeholder="project 名（省略可）" style="flex:0 1 220px"></div>
-   <div class="step"><span class="n">2</span><h3>誰に頑むか</h3><span>左のエージェントをタップ、または</span><button class="ghost" id="cast" style="padding:4px 12px;font-size:12px">✨ おすすめの顔ぶれ</button><span class="tiny" id="castnote"></span></div>
+   <div class="step"><span class="n">2</span><h3>誰に頼むか</h3><span>左のエージェントをタップ、または</span><button class="ghost" id="cast" style="padding:4px 12px;font-size:12px">✨ おすすめの顔ぶれ</button><span class="tiny" id="castnote"></span></div>
    <div class="picked" id="picked"></div>
    <div class="step"><span class="n">3</span><h3>進め方</h3></div>
    <div class="recipes" id="recipes"></div>
@@ -237,7 +237,7 @@ function followTargets(){const parts=[...new Set(RUN.tasks.map(t=>t.agent))];con
 function synthSession(){const t=[...RUN.tasks].reverse().find(t=>(t.step==='synthesize'||t.step==='run')&&t.status==='done'&&t.meta.session_id&&kindOf(t.agent)==='claude');return t?{agent:t.agent,sid:t.meta.session_id}:null}
 async function renderFollowup(finished){const el=$('#followup');if(!el)return;if(!finished){el.innerHTML='';return}
  const {synth,list}=followTargets();const ses=synthSession();
- if(!el.querySelector('#fu-text')){el.innerHTML=`<div class="card"><h2>続きを頑む</h2><div class="sub">この結果を踏まえた追加の依頼。${ses?`<b class="t-claude">${esc(ses.agent)}</b> は会話を覚えたまま再開できます`:'選んだ相手に元課題と最終結果を添えて渡します'}</div>
+ if(!el.querySelector('#fu-text')){el.innerHTML=`<div class="card"><h2>続きを頼む</h2><div class="sub">この結果を踏まえた追加の依頼。${ses?`<b class="t-claude">${esc(ses.agent)}</b> は会話を覚えたまま再開できます`:'選んだ相手に元課題と最終結果を添えて渡します'}</div>
   <div class="row"><select id="fu-agent" style="flex:0 1 260px">${list.map(n=>`<option value="${n}" ${n===(ses?ses.agent:synth)?'selected':''}>${esc(n)}${ses&&n===ses.agent?'（記憶あり）':''}</option>`).join('')}</select>
   <textarea id="fu-text" style="flex:1;min-height:64px" placeholder="例：手順1と2を実際に実行して結果を報告して"></textarea>
   <button id="fu-send" style="flex:0 0 auto">送る</button></div><div id="fu-children" style="margin-top:10px"></div></div>`;

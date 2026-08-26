@@ -339,8 +339,8 @@ class Store:
             task = self.get_task(task_id)
             if not task:
                 raise KeyError(task_id)
-            if task["status"] == "cancelled":  # cancelled while the runner was still working: keep it cancelled
-                return task
+            if task["status"] in ("done", "failed", "cancelled"):
+                return task  # terminal: idempotent — never let a double / stale finish overwrite a settled task
             if claimed_by is not None and task["claimed_by"] is not None and task["claimed_by"] != claimed_by:
                 return task  # stale/reaped runner: don't let it overwrite the current claimant's result
             meta = {**task["meta"], **(meta_update or {})}

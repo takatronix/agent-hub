@@ -92,17 +92,22 @@ class Hub:
         return run
 
     def _tick_schedules(self) -> None:
+        # claim_due_schedules already advanced next_at for every due row; handle each schedule
+        # independently so one bad schedule (e.g. unknown recipe) can't skip the rest of the batch.
         for sch in self.store.claim_due_schedules(now_iso()):
-            last = sch.get("last_run_id")
-            if last:
-                prev = self.store.get_run(last)
-                if prev and prev["status"] == "running":
-                    self.store.add_message(actor="hub", role="system", run_id=last,
-                                           content=f"スケジュール '{sch['title']}' はまだ前回の run が実行中のためスキップ")
-                    continue
-            run = self.run_schedule(sch)
-            self.store.add_message(actor="hub", role="system", run_id=run["id"],
-                                   content=f"スケジュール '{sch['title']}' から起動 (recipe={sch['recipe']})")
+            try:
+                last = sch.get("last_run_id")
+                if last:
+                    prev = self.store.get_run(last)
+                    if prev and prev["status"] == "running":
+                        self.store.add_message(actor="hub", role="system", run_id=last,
+                                               content=f"スケジュール '{sch['title']}' はまだ前回の run が実行中のためスキップ")
+                        continue
+                run = self.run_schedule(sch)
+                self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                       content=f"スケジュール '{sch['title']}' から起動 (recipe={sch['recipe']})")
+            except Exception as e:  # noqa: BLE001 - never let one schedule break the tick
+                print(f"schedule {sch.get('id')} failed: {e}", flush=True)
 
     def _scheduler(self) -> None:
         while True:
@@ -145,8 +150,10 @@ class Hub:
         policy = (run.get("spec") or {}).get("notify") or "always"
         if policy == "on_failure" and status != "failed":
             return
-        if policy == "on_report" and not league.parse_json_block(run.get("summary") or "", "notify"):
-            return
+        if policy == "on_report":
+            obj = league.parse_json_block(run.get("summary") or "", "notify")
+            if not (obj and obj.get("notify") is True):  # parse_json_block returns the dict, truthy even for {"notify": false}
+                return
         self.notifier.emit(run)
 
 
@@ -372,8 +379,22 @@ class Handler(BaseHTTPRequestHandler):
             for k in ("title", "recipe", "interval_sec"):
                 if k not in b:
                     raise ApiError(400, f"missing {k}")
-            sch = st.create_schedule(b.get("project") or "default", b["title"], b["recipe"], int(b["interval_sec"]),
-                                     spec=b.get("spec"), notify=b.get("notify", "on_report"))
+            if b["recipe"] not in ("single", "parallel", "review_panel", "team"):
+                raise ApiError(400, f"unknown recipe: {b['recipe']}")
+            try:
+                interval = int(b["interval_sec"])
+            except (TypeError, ValueError):
+                raise ApiError(400, "interval_sec must be an integer")
+            if interval <= 0:
+                raise ApiError(400, "interval_sec must be positive")
+            spec = b.get("spec")
+            if spec is not None and not isinstance(spec, dict):
+                raise ApiError(400, "spec must be an object")
+            notify = b.get("notify", "on_report")
+            if notify not in ("always", "on_failure", "on_report"):
+                raise ApiError(400, "notify must be always/on_failure/on_report")
+            sch = st.create_schedule(b.get("project") or "default", b["title"], b["recipe"], interval,
+                                     spec=spec, notify=notify)
             return self._json({"schedule": sch}, 201)
         if (mm := m(r"/api/schedules/([^/]+)/toggle")) and method == "POST":
             sch = st.toggle_schedule(mm.group(1))

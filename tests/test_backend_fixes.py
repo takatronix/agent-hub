@@ -77,6 +77,15 @@ class BackendFixesTest(unittest.TestCase):
         self.assertEqual(self.store.get_run(run["id"])["status"], "cancelled")
         self.assertEqual([t["step"] for t in self.store.list_tasks(run_id=run["id"])], ["solve", "solve"])
 
+    def test_finish_task_is_idempotent_on_terminal_state(self):
+        # A second finish (double delivery / same runner re-posting) must not overwrite a settled task.
+        t = self._claimed_task("claude-a@host1")
+        self.store.finish_task(t["id"], "done", result="first", claimed_by="claude-a@host1")
+        out = self.store.finish_task(t["id"], "failed", error="second", claimed_by="claude-a@host1")
+        self.assertEqual(out["status"], "done")
+        self.assertEqual(out["result"], "first")
+        self.assertIsNone(out["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
