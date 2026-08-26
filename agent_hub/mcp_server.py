@@ -77,6 +77,17 @@ def t_review_panel(a: dict[str, Any]) -> Any:
     return _run_summary(c.get(f"/api/runs/{run['id']}")["run"])
 
 
+def t_team(a: dict[str, Any]) -> Any:
+    c = _client()
+    spec = {"prompt": a["prompt"], "members": a["members"], "integrator": a.get("integrator"),
+            "reviewers": a.get("reviewers"), "workdir": a.get("workdir"), "models": a.get("models") or {}}
+    run = c.post("/api/runs", {"recipe": "team", "project": a.get("project", "default"),
+                               "title": a.get("title") or a["prompt"][:60], "created_by": "claude-code-mcp", "spec": spec})["run"]
+    if a.get("wait", True):
+        run = _wait_run(c, run["id"], float(a.get("timeout", 3600)))
+    return _run_summary(c.get(f"/api/runs/{run['id']}")["run"])
+
+
 def t_parallel(a: dict[str, Any]) -> Any:
     c = _client()
     run = c.post("/api/runs", {"recipe": "parallel", "project": a.get("project", "default"),
@@ -140,7 +151,12 @@ TOOLS: list[tuple[str, str, dict[str, Any], Callable[[dict[str, Any]], Any]]] = 
          "planner": {"type": "string", "description": "agent that assigns angles (default: synthesizer)"},
          "workdir": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"},
          "wait": {"type": "boolean"}, "timeout": {"type": "number"}}}, t_review_panel),
-    ("parallel", "Same prompt to several agents at once, no review; returns all answers.",
+    ("team", "Cooperative division of labor: a leader splits the job into per-member assignments, members work in parallel, integrator merges, everyone reviews, integrator finalizes. DEFAULT for building things together.",
+     {"type": "object", "required": ["prompt", "members"], "properties": {
+         "prompt": {"type": "string"}, "members": AGENT_ARR, "integrator": {"type": "string"}, "reviewers": AGENT_ARR,
+         "models": {"type": "object", "additionalProperties": {"type": "string"}}, "workdir": {"type": "string"},
+         "project": {"type": "string"}, "title": {"type": "string"}, "wait": {"type": "boolean"}, "timeout": {"type": "number"}}}, t_team),
+    ("parallel", "Same prompt to several agents at once; answers are then anonymously cross-scored (no synthesis).",
      {"type": "object", "required": ["prompt", "agents"], "properties": {
          "prompt": {"type": "string"}, "agents": AGENT_ARR, "workdir": {"type": "string"}, "project": {"type": "string"},
          "title": {"type": "string"}, "wait": {"type": "boolean"}, "timeout": {"type": "number"}}}, t_parallel),

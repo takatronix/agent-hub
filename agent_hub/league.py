@@ -105,7 +105,7 @@ def tally(run: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[str, Any]:
     aliases: dict[str, str] = state.get("aliases") or {}
     per_agent: dict[str, dict[str, Any]] = {a: {"scores": [], "best": 0, "adopted": False, "reviews": 0, "time": None} for a in aliases.values()}
     for t in tasks:
-        if t["step"] == "solve" and t["agent"] in per_agent and t["meta"].get("duration_s") is not None:
+        if t["step"] in ("solve", "run") and t["agent"] in per_agent and t["meta"].get("duration_s") is not None:
             per_agent[t["agent"]]["time"] = float(t["meta"]["duration_s"])
         if t["step"] == "review" and t["status"] == "done":
             parsed = t["meta"].get("review") or parse_scores(t.get("result") or "")

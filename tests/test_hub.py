@@ -113,6 +113,66 @@ class StoreRecipeTest(unittest.TestCase):
         self.assertIsNone(self.store.claim_next(["b"], "w"))
 
 
+class TeamTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "t.sqlite3")
+        self.orch = Orchestrator(self.store)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _finish(self, agent, result):
+        t = next(t for t in self.store.list_tasks(status="queued", limit=50) if t["agent"] == agent)
+        self.store.claim_next([agent], "x")
+        self.orch.on_task_finished(self.store.finish_task(t["id"], "done", result=result))
+
+    def test_team_flow(self):
+        run = self.orch.start("team", "p", "t", {"prompt": "アプリを作る", "members": ["a", "b", "c"], "integrator": "a"})
+        self.assertEqual(run["state"]["phase"], "plan")
+        self._finish("a", '分担 ```json {"assignments": {"a": "設計", "b": "実装", "c": "テスト"}, "integration_hint": "API契約"} ```')
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["state"]["phase"], "work")
+        work = self.store.list_tasks(run_id=run["id"], status="queued")
+        self.assertEqual(len(work), 3)
+        self.assertIn("実装", next(t for t in work if t["agent"] == "b")["prompt"])
+        for m in ("a", "b", "c"):
+            self._finish(m, f"{m} done\n## 成果物\n{m}の成果")
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["state"]["phase"], "integrate")
+        it = self.store.list_tasks(run_id=run["id"], status="queued")
+        self.assertEqual([t["agent"] for t in it], ["a"])
+        self.assertIn("bの成果", it[0]["prompt"])
+        self._finish("a", "## 統合成果物\n合体版")
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["state"]["phase"], "review")
+        for m in ("a", "b", "c"):
+            self._finish(m, 'ok ```json {"score": 8, "issues": ["x"]} ```')
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["state"]["phase"], "finalize")
+        self.assertEqual(run["state"]["review_avg"], 8.0)
+        self._finish("a", "## 最終成果物\n完成")
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["status"], "done")
+        self.assertIn("完成", run["summary"])
+
+    def test_parallel_review(self):
+        run = self.orch.start("parallel", "p", "t", {"prompt": "Q", "agents": ["a", "b"]})
+        for m in ("a", "b"):
+            t = next(t for t in self.store.list_tasks(run_id=run["id"], status="queued") if t["agent"] == m)
+            self.store.claim_next([m], "x")
+            self.orch.on_task_finished(self.store.finish_task(t["id"], "done", result=f"{m} ans"))
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["state"]["phase"], "review")
+        for m, other in (("a", "B"), ("b", "A")):
+            t = next(t for t in self.store.list_tasks(run_id=run["id"], status="queued") if t["agent"] == m)
+            self.store.claim_next([m], "x")
+            self.orch.on_task_finished(self.store.finish_task(t["id"], "done", result=f'```json {{"scores": {{"{other}": 9}}, "best": "{other}"}} ```'))
+        run = self.store.get_run(run["id"])
+        self.assertEqual(run["status"], "done")
+        self.assertEqual(run["state"]["results"]["a"]["avg"], 9.0)
+
+
 class LeagueParseTest(unittest.TestCase):
     def test_parse_scores_and_category(self):
         self.assertEqual(league.parse_scores('x ```json\n{"scores": {"a": 8, "C": "6"}, "best": "c"}\n```')["best"], "C")

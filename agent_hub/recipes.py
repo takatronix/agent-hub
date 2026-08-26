@@ -67,6 +67,82 @@ SYNTH_PROMPT = """あなたは「{agent}」として、複数の匿名回答と�
 """
 
 
+TEAM_PLAN_PROMPT = """あなたは「{agent}」。複数の AI エージェントで**分担して**取り組む仕事のリーダーとして、作業分解と割り当てを行います。
+重複なく・合わせると仕事全体が完成する分担にし、各自の個性・実績（プロフィール参照）を活かしてください。
+
+# 仕事
+{prompt}
+
+# メンバーのプロフィール
+{profiles}
+
+# 出力ルール
+- 各メンバーに担当パートを 2〜5 行で（何を作る/調べるか、成果物の形、やらないこと）。
+- 統合時の噛み合わせ（インターフェース・形式の取り決め）があれば書く。
+- 最後に必ず JSON を 1 つだけ: ```json {{"assignments": {{"<メンバー名>": "<担当>", ...}}, "integration_hint": "<統合時の注意>"}} ```
+"""
+
+TEAM_WORK_PROMPT = """あなたは「{agent}」。チームで分担して仕事をしています。あなたの担当パートを完成させてください。
+
+# 仕事全体
+{prompt}
+
+# チームの分担
+{assignments}
+
+# あなたの担当
+{own}
+
+# 出力ルール
+- 他人の担当分はやらない（重複は統合の邪魔になる）。担当外で重大な問題に気づいたら「## 申し送り」に短く書く。
+- 最後に「## 成果物」見出しで、統合役がそのまま使える形（本文・コード・表など）でまとめる。
+"""
+
+TEAM_INTEGRATE_PROMPT = """あなたは「{agent}」。チーム各自の成果物を 1 つに統合します。
+
+# 仕事全体
+{prompt}
+
+# 統合時の注意
+{hint}
+
+# 各メンバーの成果物
+{parts}
+
+# 出力ルール
+- 「## 統合成果物」: 全パートを噛み合わせた完成品。矛盾があれば解消し、どう解消したか「## 統合メモ」に記録。
+- 欠けているパート・品質の低いパートは補修し、その旨をメモに書く。
+"""
+
+TEAM_REVIEW_PROMPT = """あなたは「{agent}」。チームの統合成果物をレビューします（あなた自身の担当分も含めて、全体として仕事が完成しているか）。
+
+# 仕事全体
+{prompt}
+
+# 統合成果物
+{integrated}
+
+# 出力ルール
+- 問題点（誤り・抜け・噛み合わせ不良）を具体的に。修正案があれば添える。
+- 最後に必ず JSON を 1 つ: ```json {{"score": <1-10>, "issues": ["<重要な問題を1行ずつ>"]}} ```
+"""
+
+TEAM_FINALIZE_PROMPT = """あなたは「{agent}」。統合成果物にレビューを反映して最終版を作ります。
+
+# 仕事全体
+{prompt}
+
+# 統合成果物（現行版）
+{integrated}
+
+# チームのレビュー
+{reviews}
+
+# 出力ルール
+- 「## 最終成果物」: レビューの妥当な指摘を反映した完成版（全文。差分だけにしない）。
+- 「## 反映記録」: どの指摘を反映し、どれを見送ったか（理由つき）。
+"""
+
 PLAN_PROMPT = """あなたは「{agent}」として、複数の AI エージェントで取り組む課題の **配役（担当視点の割り当て）** を決めます。
 同じ視点を複数人に重複させず、全員の視点を合わせると課題全体が漏れなく覆われ、かつ各自の個性・実績が活きる割り当てにしてください。
 
@@ -136,6 +212,8 @@ class Orchestrator:
     def start(self, recipe: str, project: str, title: str, spec: dict[str, Any], created_by: str = "") -> dict[str, Any]:
         if recipe == "review_panel":
             return self._start_review_panel(project, title, spec, created_by)
+        if recipe == "team":
+            return self._start_team(project, title, spec, created_by)
         if recipe == "single":
             return self._start_single(project, title, spec, created_by)
         if recipe == "parallel":
@@ -180,16 +258,162 @@ class Orchestrator:
 
     # ---- parallel (same prompt to N agents, no review) --------------------------
     def _start_parallel(self, project, title, spec, created_by):
-        run = self.store.create_run(project, title, "parallel", spec, created_by, state={"phase": "run"})
+        state = {"phase": "run"}
+        if spec.get("review", True) and len(spec["agents"]) >= 2:
+            state["aliases"] = league.make_aliases(list(spec["agents"]))
+            state["category"] = spec.get("category") or league.guess_category(spec["prompt"])
+        run = self.store.create_run(project, title, "parallel", spec, created_by, state=state)
         for agent in spec["agents"]:
             self.store.create_task(project, f"{title} [{agent}]", spec["prompt"], agent, run_id=run["id"],
                                    step="run", workdir=spec.get("workdir"), meta=_meta(spec, agent))
         return run
 
     def _advance_parallel(self, run, tasks):
-        ok = [t for t in tasks if t["status"] == "done"]
-        summary = "\n\n".join(f"### {_label(t)}\n{_result(t, 6000)}" for t in tasks)
-        self.store.update_run(run["id"], status="done" if ok else "failed", summary=summary, state={"phase": "finished"})
+        spec, state = run["spec"], run["state"]
+        by_step: dict[str, list[dict[str, Any]]] = {}
+        for t in tasks:
+            by_step.setdefault(t["step"], []).append(t)
+        if state.get("phase") == "run" and state.get("aliases"):
+            solved = [t for t in by_step.get("run", []) if t["status"] == "done"]
+            if len(solved) >= 2:
+                state = {**state, "phase": "review"}
+                self.store.update_run(run["id"], state=state)
+                self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                       content="全回答が出ました。匿名で相互採点します。")
+                letter_of = {v: k for k, v in state["aliases"].items()}
+                for reviewer in spec["agents"]:
+                    others = [t for t in solved if t["agent"] != reviewer]
+                    if not others:
+                        continue
+                    keys = ", ".join(f'"{letter_of.get(t["agent"], "?")}": <1-10>' for t in others)
+                    own = next((t for t in solved if t["agent"] == reviewer), None)
+                    prompt = REVIEW_PROMPT.format(agent=reviewer, prompt=spec["prompt"], score_keys=keys,
+                                                  own=_result(own) if own else "(あなたは回答していません)",
+                                                  others="\n\n".join(f"## 回答 {letter_of.get(t['agent'], '?')}\n{_result(t)}" for t in others))
+                    self.store.create_task(run["project"], f"採点 [{reviewer}]", prompt, reviewer, run_id=run["id"],
+                                           step="review", workdir=spec.get("workdir"), meta=_meta(spec, reviewer))
+                return
+        if state.get("phase") == "review":
+            for t in by_step.get("review", []):
+                if t["status"] == "done" and not t["meta"].get("review"):
+                    parsed = league.parse_scores(t.get("result") or "")
+                    if parsed:
+                        self.store.finish_task(t["id"], "done", result=t["result"], meta_update={"review": parsed})
+            results = league.tally({**run, "state": state}, self.store.list_tasks(run_id=run["id"], limit=500))
+            runs_tasks = [t for t in by_step.get("run", [])]
+            summary = "\n\n".join(f"### {_label(t)}\n{_result(t, 6000)}" for t in runs_tasks)
+            self.store.update_run(run["id"], status="done", summary=summary, state={**state, "phase": "finished", "results": results})
+            return
+        ok = [t for t in by_step.get("run", []) if t["status"] == "done"]
+        summary = "\n\n".join(f"### {_label(t)}\n{_result(t, 6000)}" for t in by_step.get("run", []))
+        self.store.update_run(run["id"], status="done" if ok else "failed", summary=summary, state={**state, "phase": "finished"})
+
+    # ---- team (plan -> work -> integrate -> review -> finalize) -------------------
+    def _start_team(self, project, title, spec, created_by):
+        members = list(spec["members"])
+        if len(members) < 2:
+            raise ValueError("team needs at least 2 members")
+        spec = {**spec, "members": members, "integrator": spec.get("integrator") or members[0]}
+        state = {"phase": "plan", "category": spec.get("category") or league.guess_category(spec["prompt"])}
+        run = self.store.create_run(project, title, "team", spec, created_by, state=state)
+        planner = spec.get("planner") or spec["integrator"]
+        self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                               content=f"協力分担を開始: members={members} integrator={spec['integrator']}。{planner} が分担を決めます。")
+        prompt = TEAM_PLAN_PROMPT.format(agent=planner, prompt=spec["prompt"], profiles=_profiles(self.store, members, spec))
+        self.store.create_task(project, f"分担決め [{planner}]", prompt, planner, run_id=run["id"], step="plan",
+                               workdir=spec.get("workdir"), meta=_meta(spec, planner))
+        return run
+
+    def _advance_team(self, run, tasks):
+        spec, state = run["spec"], run["state"]
+        phase = state.get("phase")
+        by_step: dict[str, list[dict[str, Any]]] = {}
+        for t in tasks:
+            by_step.setdefault(t["step"], []).append(t)
+
+        if phase == "plan":
+            t = (by_step.get("plan") or [None])[0]
+            obj = league.parse_json_block((t or {}).get("result") or "", "assignments") or {}
+            assignments = {k: str(v) for k, v in (obj.get("assignments") or {}).items() if k in spec["members"]}
+            for m in spec["members"]:
+                assignments.setdefault(m, "(担当指定なし: 仕事全体からあなたが最も貢献できる部分を選び、冒頭で宣言して進める)")
+            state = {**state, "phase": "work", "assignments": assignments, "integration_hint": obj.get("integration_hint") or ""}
+            self.store.update_run(run["id"], state=state)
+            self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                   content="分担決定: " + "; ".join(f"{k}: {v.splitlines()[0][:60]}" for k, v in assignments.items()))
+            listing = "\n".join(f"- {k}: {v}" for k, v in assignments.items())
+            for m in spec["members"]:
+                prompt = TEAM_WORK_PROMPT.format(agent=m, prompt=spec["prompt"], assignments=listing, own=assignments[m])
+                self.store.create_task(run["project"], f"作業 [{m}]", prompt, m, run_id=run["id"], step="work",
+                                       workdir=spec.get("workdir"), meta=_meta(spec, m, angle=assignments[m]))
+            return
+
+        if phase == "work":
+            worked = [t for t in by_step.get("work", []) if t["status"] == "done"]
+            if not worked:
+                self._fail(run, "全メンバーの作業が失敗したため中止")
+                return
+            self.store.update_run(run["id"], state={**state, "phase": "integrate"})
+            self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                   content=f"作業完了 ({len(worked)}/{len(by_step['work'])})。{spec['integrator']} が統合します。")
+            prompt = TEAM_INTEGRATE_PROMPT.format(agent=spec["integrator"], prompt=spec["prompt"],
+                                                  hint=state.get("integration_hint") or "(特になし)",
+                                                  parts="\n\n".join(f"## {_label(t)} の成果物\n{_result(t, 20000)}" for t in worked))
+            self.store.create_task(run["project"], f"統合 [{spec['integrator']}]", prompt, spec["integrator"],
+                                   run_id=run["id"], step="integrate", workdir=spec.get("workdir"),
+                                   meta=_meta(spec, spec["integrator"]))
+            return
+
+        if phase == "integrate":
+            it = next((t for t in by_step.get("integrate", []) if t["status"] == "done"), None)
+            if not it:
+                self._fail(run, "統合に失敗")
+                return
+            self.store.update_run(run["id"], state={**state, "phase": "review"})
+            self.store.add_message(actor="hub", role="system", run_id=run["id"], content="統合完了。全員でレビューします。")
+            reviewers = spec.get("reviewers") or spec["members"]
+            for m in reviewers:
+                prompt = TEAM_REVIEW_PROMPT.format(agent=m, prompt=spec["prompt"], integrated=_result(it, 24000))
+                self.store.create_task(run["project"], f"レビュー [{m}]", prompt, m, run_id=run["id"], step="review",
+                                       workdir=spec.get("workdir"), meta=_meta(spec, m))
+            return
+
+        if phase == "review":
+            it = next((t for t in by_step.get("integrate", []) if t["status"] == "done"), None)
+            reviews = [t for t in by_step.get("review", []) if t["status"] == "done"]
+            scores = []
+            for t in reviews:
+                obj = league.parse_json_block(t.get("result") or "", "score")
+                if obj:
+                    try:
+                        sc = max(1.0, min(10.0, float(obj.get("score"))))
+                        scores.append(sc)
+                        self.store.finish_task(t["id"], "done", result=t["result"],
+                                               meta_update={"review": {"score": sc, "issues": obj.get("issues") or []}})
+                    except (TypeError, ValueError):
+                        pass
+            self.store.update_run(run["id"], state={**state, "phase": "finalize",
+                                                    "review_avg": round(sum(scores) / len(scores), 2) if scores else None})
+            self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                   content=f"レビュー完了 ({len(reviews)} 件、平均 {round(sum(scores)/len(scores),1) if scores else '-'} 点)。最終版を作ります。")
+            prompt = TEAM_FINALIZE_PROMPT.format(agent=spec["integrator"], prompt=spec["prompt"],
+                                                 integrated=_result(it, 24000),
+                                                 reviews="\n\n".join(f"## レビュー by {_label(t)}\n{_result(t, 8000)}" for t in reviews) or "(なし)")
+            self.store.create_task(run["project"], f"仕上げ [{spec['integrator']}]", prompt, spec["integrator"],
+                                   run_id=run["id"], step="finalize", workdir=spec.get("workdir"),
+                                   meta=_meta(spec, spec["integrator"]))
+            return
+
+        if phase == "finalize":
+            ft = next((t for t in by_step.get("finalize", []) if t["status"] == "done"), None)
+            if ft:
+                times = {t["agent"]: t["meta"].get("duration_s") for t in by_step.get("work", []) if t["status"] == "done"}
+                self.store.update_run(run["id"], status="done", summary=ft["result"] or "",
+                                      state={**state, "phase": "finished", "work_times": times})
+                self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                       content=f"協力分担 完了。レビュー平均 {state.get('review_avg') or '-'} 点。")
+            else:
+                self._fail(run, "仕上げに失敗")
 
     # ---- review_panel (solve -> cross review -> synthesize) ----------------------
     def _start_review_panel(self, project, title, spec, created_by):
