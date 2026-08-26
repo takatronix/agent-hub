@@ -177,6 +177,9 @@ async function start(){const prompt=$('#prompt').value.trim();if(!prompt)return 
  try{const j=await api('/api/runs',{recipe,project:$('#project').value||'default',title:prompt.split('\n')[0].slice(0,70),spec,created_by:'web'});toast('開始しました');go('/runs/'+j.run.id)}catch(e){toast(e.message)}}
 /* ---------------- run ---------------- */
 let RUN=null,MSGS=[],lastId=0,view='cols';
+const pinned={};const atBottom=el=>el.scrollHeight-el.scrollTop-el.clientHeight<40;
+document.addEventListener('scroll',e=>{const el=e.target;if(el&&el.classList&&el.classList.contains('body')){const col=el.closest('.col');if(col&&col.dataset.task)pinned[col.dataset.task]=atBottom(el)}},true);
+function keepScroll(fn){const saved={};document.querySelectorAll('.col[data-task] .body').forEach(el=>{saved[el.closest('.col').dataset.task]=el.scrollTop});fn();document.querySelectorAll('.col[data-task] .body').forEach(el=>{const id=el.closest('.col').dataset.task;if(pinned[id]===false&&saved[id]!=null)el.scrollTop=saved[id];else el.scrollTop=el.scrollHeight})}
 async function showRun(id){childrenLoaded=false;bodyKey='';agents=(await api('/api/agents')).agents;const j=await api('/api/runs/'+id);RUN=j.run;MSGS=(await api(`/api/runs/${id}/messages`)).messages;lastId=MSGS.length?MSGS[MSGS.length-1].id:0;view=RUN.status==='done'?'results':'cols';
  const pr=RUN.spec.parent_run;const prOk=typeof pr==='string'&&/^run_[0-9a-f]+$/.test(pr);
  $('#crumb').innerHTML=`/ <a href="/" onclick="event.preventDefault();go('/')">missions</a> / ${prOk?`<a href="/runs/${pr}" onclick="event.preventDefault();go('/runs/${pr}')">親ミッション</a> / `:''}${esc(RUN.title.slice(0,40))}`;
@@ -193,7 +196,7 @@ async function showRun(id){childrenLoaded=false;bodyKey='';agents=(await api('/a
  const resync=async()=>{try{const j2=await api('/api/runs/'+id);RUN=j2.run;const mm=(await api(`/api/runs/${id}/messages?after=${lastId}`)).messages;for(const m of mm){if(m.id>lastId){MSGS.push(m);lastId=m.id}}renderRun()}catch(e){}};
  const s=connect(id,resync);s.addEventListener('message',e=>{const m=JSON.parse(e.data).message;if(m.id>lastId){MSGS.push(m);lastId=m.id;appendMsg(m)}});
  s.addEventListener('task',e=>{const t=JSON.parse(e.data).task;const i=RUN.tasks.findIndex(x=>x.id===t.id);if(i>=0)RUN.tasks[i]=t;else RUN.tasks.push(t);renderRun()});
- s.addEventListener('run',e=>{const r=JSON.parse(e.data).run;const was=RUN.status;Object.assign(RUN,{status:r.status,state:r.state,summary:r.summary});if(was==='running'&&r.status!=='running'){view='results';toast(r.status==='done'?'✅ ミッション完了':'ミッション終了: '+r.status);window.scrollTo({top:0,behavior:'smooth'})}renderRun()})}
+ s.addEventListener('run',e=>{const r=JSON.parse(e.data).run;const was=RUN.status;Object.assign(RUN,{status:r.status,state:r.state,summary:r.summary});if(was==='running'&&r.status!=='running'){view='results';toast(r.status==='done'?'✅ ミッション完了':'ミッション終了: '+r.status);if(window.scrollY<300)window.scrollTo({top:0,behavior:'smooth'})}renderRun()})}
 let bodyKey='';
 function renderRun(){const ph=PHASES[RUN.recipe]||[];const cur=RUN.state.phase;const ci=ph.findIndex(p=>p[0]===cur);const finished=RUN.status!=='running';
  $('#flow').innerHTML=ph.filter(p=>p[0]!=='plan'||RUN.tasks.some(t=>t.step==='plan')).map((p,i)=>{const ts=RUN.tasks.filter(t=>t.step===p[0]);const done=ts.filter(t=>t.status==='done').length;const st=finished||i<ci?'past':i===ci?'cur':'';
@@ -240,15 +243,16 @@ function scoreOf(n){const r=(RUN&&RUN.state.results)||{};const d=r[n];if(!d)retu
 function timeStat(){const ts=RUN.tasks.filter(t=>t.step==='solve'&&t.meta.duration_s);if(ts.length<2)return'';const f=ts.reduce((a,b)=>a.meta.duration_s<b.meta.duration_s?a:b),s=ts.reduce((a,b)=>a.meta.duration_s>b.meta.duration_s?a:b);return`<span>最速 <b class="t-${kindOf(f.agent)}">${esc(f.agent)}</b> ${Math.round(f.meta.duration_s)}s</span><span>最遅 <b class="t-${kindOf(s.agent)}">${esc(s.agent)}</b> ${Math.round(s.meta.duration_s)}s</span>`}
 function colHead(t){const meta=t.meta||{};const al=aliasOf(t.agent);const ang=meta.angle?`<span class="tiny" title="${esc(meta.angle)}" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🎯 ${esc(meta.angle.split('\n')[0])}</span>`:'';return`<h3>${av(t.agent)}<span class="t-${kindOf(t.agent)}" style="font-weight:700">${esc(t.agent)}</span>${al&&t.step==='solve'?`<span class="tiny mono" title="レビュー時の匿名記号">回答 ${al}</span>`:''}${t.step==='solve'?scoreOf(t.agent):''}${ang}${meta.model?`<span class="tiny mono">${esc(meta.model)}</span>`:''}${pill(t.status)}<span class="tiny" style="margin-left:auto">${meta.duration_s?meta.duration_s+'s':''}${meta.usage&&meta.usage.total_cost_usd!=null?' · $'+meta.usage.total_cost_usd.toFixed(2):''}</span></h3>`}
 const typing='<div class="typing"><i></i><i></i><i></i></div>';
-function renderBody(){const b=$('#body');const ph=PHASES[RUN.recipe]||[];const label=s=>(ph.find(p=>p[0]===s)||[s,s])[1];const steps=[...new Set(RUN.tasks.map(t=>t.step))];
+function renderBody(){keepScroll(()=>renderBodyInner())}
+function renderBodyInner(){const b=$('#body');const ph=PHASES[RUN.recipe]||[];const label=s=>(ph.find(p=>p[0]===s)||[s,s])[1];const steps=[...new Set(RUN.tasks.map(t=>t.step))];
  const sec=(step,inner)=>`<div class="step"><span class="n">${ph.findIndex(p=>p[0]===step)+1||'•'}</span><h3>${label(step)}</h3></div><div class="cols">${inner}</div>`;
  if(view==='results'){b.innerHTML=steps.map(step=>sec(step,RUN.tasks.filter(t=>t.step===step).map(t=>`<div class="col" data-task="${t.id}">${colHead(t)}<div class="body">${t.result?`<div class="md">${md(t.result)}</div>`:t.error?`<div class="msg stderr">${esc(t.error)}</div>`:'<div class="empty">'+(t.status==='running'?typing:'待機中')+'</div>'}</div></div>`).join(''))).join('');return}
  if(view==='time'){b.innerHTML=`<div class="card" id="tl">${MSGS.map(m=>msgHtml(m,true)).join('')||'<div class="empty">まだ何も起きていません</div>'}</div>`;return}
  b.innerHTML=steps.map(step=>sec(step,RUN.tasks.filter(t=>t.step===step).map(t=>`<div class="col" data-task="${t.id}">${colHead(t)}<div class="body">${MSGS.filter(m=>m.task_id===t.id).map(m=>msgHtml(m,false)).join('')||'<div class="empty">'+(t.status==='running'?typing:'待機中')+'</div>'}${t.status==='running'?'<div class="live-typing">'+typing+'</div>':''}</div></div>`).join(''))).join('')
  +(MSGS.some(m=>!m.task_id)?`<div class="step"><span class="n">H</span><h3>hub</h3></div><div class="card">${MSGS.filter(m=>!m.task_id).map(m=>msgHtml(m,true)).join('')}</div>`:'');
- document.querySelectorAll('.col .body').forEach(el=>el.scrollTop=el.scrollHeight)}
-function appendMsg(m){if(view==='time'){const tl=$('#tl');if(tl){tl.insertAdjacentHTML('beforeend',msgHtml(m,true));tl.lastElementChild?.scrollIntoView({block:'nearest',behavior:'smooth'})}return}
- if(view==='cols'){const col=document.querySelector(`.col[data-task="${m.task_id}"] .body`);if(col){col.querySelector('.empty')?.remove();const lt=col.querySelector('.live-typing');if(lt)lt.insertAdjacentHTML('beforebegin',msgHtml(m,false));else col.insertAdjacentHTML('beforeend',msgHtml(m,false));col.scrollTop=col.scrollHeight;return}}
+}
+function appendMsg(m){if(view==='time'){const tl=$('#tl');if(tl){const nearEnd=window.innerHeight+window.scrollY>=document.body.scrollHeight-200;tl.insertAdjacentHTML('beforeend',msgHtml(m,true));if(nearEnd)tl.lastElementChild?.scrollIntoView({block:'nearest',behavior:'smooth'})}return}
+ if(view==='cols'){const col=document.querySelector(`.col[data-task="${m.task_id}"] .body`);if(col){col.querySelector('.empty')?.remove();const lt=col.querySelector('.live-typing');if(lt)lt.insertAdjacentHTML('beforebegin',msgHtml(m,false));else col.insertAdjacentHTML('beforeend',msgHtml(m,false));if(pinned[m.task_id]!==false)col.scrollTop=col.scrollHeight;return}}
  renderBody()}
 window.onpopstate=route;route();
 </script></body></html>
