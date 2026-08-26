@@ -306,7 +306,7 @@ class Store:
         return task
 
     def finish_task(self, task_id: str, status: str, result: str | None = None, error: str | None = None,
-                    meta_update: dict[str, Any] | None = None) -> dict[str, Any]:
+                    meta_update: dict[str, Any] | None = None, claimed_by: str | None = None) -> dict[str, Any]:
         if status not in ("done", "failed", "cancelled"):
             raise ValueError("finish status must be done/failed/cancelled")
         with self._lock:
@@ -315,6 +315,8 @@ class Store:
                 raise KeyError(task_id)
             if task["status"] == "cancelled":  # cancelled while the runner was still working: keep it cancelled
                 return task
+            if claimed_by is not None and task["claimed_by"] is not None and task["claimed_by"] != claimed_by:
+                return task  # stale/reaped runner: don't let it overwrite the current claimant's result
             meta = {**task["meta"], **(meta_update or {})}
             ts = now_iso()
             self._conn.execute(

@@ -112,6 +112,8 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method: str) -> None:
         url = urlsplit(self.path)
         path, query = url.path, parse_qs(url.query)
+        n = int(self.headers.get("Content-Length") or 0)
+        self._raw_body = self.rfile.read(n) if n > 0 else b""
         try:
             if not self._authorized(method, path, query):
                 raise ApiError(401, "unauthorized")
@@ -147,10 +149,9 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _body(self) -> dict[str, Any]:
-        n = int(self.headers.get("Content-Length") or 0)
-        if n == 0:
+        raw = getattr(self, "_raw_body", b"")
+        if not raw:
             return {}
-        raw = self.rfile.read(n)
         try:
             data = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as e:
@@ -194,11 +195,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"projects": st.list_projects()})
         if path == "/api/projects" and method == "POST":
             b = self._body()
+            if not b.get("name"):
+                raise ApiError(400, "missing name")
             return self._json({"project": st.ensure_project(b["name"], b.get("title"), b.get("description", ""))})
         if path == "/api/agents" and method == "GET":
             return self._json({"agents": st.list_agents()})
         if path == "/api/agents/heartbeat" and method == "POST":
             b = self._body()
+            if not b.get("name"):
+                raise ApiError(400, "missing name")
             return self._json({"agent": st.heartbeat(b["name"], b.get("kind", "unknown"), b.get("host", ""),
                                                      b.get("status", "idle"), b.get("current_task"), b.get("meta"))})
 
@@ -250,6 +255,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/tasks" and method == "POST":
             b = self._body()
+            for k in ("prompt", "agent"):
+                if not b.get(k):
+                    raise ApiError(400, f"missing {k}")
             task = st.create_task(b.get("project") or "default", b.get("title") or b["prompt"][:60], b["prompt"],
                                   b["agent"], workdir=b.get("workdir"), meta=b.get("meta"))
             return self._json({"task": task}, 201)
@@ -275,7 +283,8 @@ class Handler(BaseHTTPRequestHandler):
         if (mm := m(r"/api/tasks/([^/]+)/finish")) and method == "POST":
             b = self._body()
             try:
-                task = st.finish_task(mm.group(1), b.get("status", "done"), b.get("result"), b.get("error"), b.get("meta"))
+                task = st.finish_task(mm.group(1), b.get("status", "done"), b.get("result"), b.get("error"),
+                                      b.get("meta"), claimed_by=b.get("claimed_by"))
             except KeyError:
                 raise ApiError(404, "task not found")
             self.hub.orch.on_task_finished(task)

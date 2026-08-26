@@ -5,3 +5,4 @@ runner.json
 *.sqlite3*
 artifacts/
 .venv/
+.claude/
