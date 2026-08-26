@@ -166,8 +166,11 @@ class Orchestrator:
     # ---- single ---------------------------------------------------------------
     def _start_single(self, project, title, spec, created_by):
         run = self.store.create_run(project, title, "single", spec, created_by, state={"phase": "run"})
+        meta = _meta(spec, spec["agent"], label=spec.get("label"))
+        if spec.get("resume_session"):
+            meta["resume_session"] = spec["resume_session"]
         self.store.create_task(project, title, spec["prompt"], spec["agent"], run_id=run["id"],
-                               step="run", workdir=spec.get("workdir"), meta=_meta(spec, spec["agent"], label=spec.get("label")))
+                               step="run", workdir=spec.get("workdir"), meta=meta)
         return run
 
     def _advance_single(self, run, tasks):

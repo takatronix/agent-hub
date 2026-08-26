@@ -61,6 +61,8 @@ def _pump_stderr(proc: subprocess.Popen, sink: list[str]) -> None:
 # ---------------------------------------------------------------------------
 def run_claude(prompt: str, workdir: str | None, cfg: dict[str, Any], res: AdapterResult) -> Iterator[dict[str, Any]]:
     cmd = [cfg.get("bin", "claude"), "-p", "--verbose", "--output-format", "stream-json"]
+    if cfg.get("resume"):
+        cmd += ["--resume", cfg["resume"]]
     if cfg.get("model"):
         cmd += ["--model", cfg["model"]]
     if cfg.get("permission_mode"):

@@ -125,7 +125,7 @@ function md(src){let t=esc(src||'');const blocks=[];t=t.replace(/```([\w+-]*)\n(
 let selected=[],recipe='review_panel',models={};
 const MODELS={claude:['','opus','fable','sonnet','haiku'],codex:['','gpt-5.5','gpt-5.5-codex','o4-mini'],api:['']};
 function modelSel(n){const k=kindOf(n);const opts=MODELS[k];if(!opts||opts.length<2)return'';const a=agents.find(x=>x.name===n);const def=(a&&a.meta&&a.meta.model)||'既定';return`<select class="msel" title="この run で使うモデル（既定: ${def}）" onclick="event.stopPropagation()" onchange="models['${n}']=this.value||undefined;updateForm()" style="width:auto;padding:2px 6px;border-radius:8px;font-size:11px;background:var(--bg2);border:1px solid var(--line);color:${models[n]?'var(--acc)':'var(--mut)'}">${opts.map(o=>`<option value="${o}" ${(models[n]||'')===o?'selected':''}>${o||def}</option>`).join('')}</select>`}
-async function showHome(){$('#crumb').textContent='';const [a,r]=await Promise.all([api('/api/agents'),api('/api/runs?limit=100')]);agents=a.agents;selected=selected.filter(n=>agents.some(x=>x.name===n&&x.online));
+async function showHome(){runsKey='';agentsKey='';$('#crumb').textContent='';const [a,r]=await Promise.all([api('/api/agents'),api('/api/runs?limit=100')]);agents=a.agents;selected=selected.filter(n=>agents.some(x=>x.name===n&&x.online));
  $('#app').innerHTML=`<div class="grid">
  <aside><div class="card"><h2>エージェント</h2><div class="sub">タップして参加者に追加</div><div id="agents"></div></div></aside>
  <section>
@@ -172,13 +172,14 @@ async function start(){const prompt=$('#prompt').value.trim();if(!prompt)return 
  try{const j=await api('/api/runs',{recipe,project:$('#project').value||'default',title:prompt.split('\n')[0].slice(0,70),spec,created_by:'web'});toast('開始しました');go('/runs/'+j.run.id)}catch(e){toast(e.message)}}
 /* ---------------- run ---------------- */
 let RUN=null,MSGS=[],lastId=0,view='cols';
-async function showRun(id){agents=(await api('/api/agents')).agents;const j=await api('/api/runs/'+id);RUN=j.run;MSGS=(await api(`/api/runs/${id}/messages`)).messages;lastId=MSGS.length?MSGS[MSGS.length-1].id:0;view=RUN.status==='done'?'results':'cols';
- $('#crumb').innerHTML=`/ <a href="/" onclick="event.preventDefault();go('/')">missions</a> / ${esc(RUN.title.slice(0,40))}`;
+async function showRun(id){childrenLoaded=false;agents=(await api('/api/agents')).agents;const j=await api('/api/runs/'+id);RUN=j.run;MSGS=(await api(`/api/runs/${id}/messages`)).messages;lastId=MSGS.length?MSGS[MSGS.length-1].id:0;view=RUN.status==='done'?'results':'cols';
+ $('#crumb').innerHTML=`/ <a href="/" onclick="event.preventDefault();go('/')">missions</a> / ${RUN.spec.parent_run?`<a href="/runs/${RUN.spec.parent_run}" onclick="event.preventDefault();go('/runs/${RUN.spec.parent_run}')">親ミッション</a> / `:''}${esc(RUN.title.slice(0,40))}`;
  $('#app').innerHTML=`<div class="card"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><h2 style="font-size:17px;flex:1 1 300px">${esc(RUN.title)}</h2>${pill(RUN.status)}${RUN.status==='running'?'<button class="ghost" id="cancel">中止</button>':''}</div>
   <div class="tiny">${RECIPES.find(x=>x[0]===RUN.recipe)?.[1]||RUN.recipe} · ${esc(RUN.project)} · ${fmtDt(RUN.created_at)}</div>
   <div class="flow" id="flow"></div><div class="stat" id="stat"></div>
   <details style="margin-top:8px"><summary>課題プロンプトを見る</summary><div class="msg system" style="white-space:pre-wrap;color:var(--mut)">${esc(RUN.spec.prompt||'')}</div></details></div>
   <div id="final"></div>
+  <div id="followup"></div>
   <div class="tabs"><span class="tab" data-v="results">結論だけ</span><span class="tab" data-v="cols">エージェント別（全過程）</span><span class="tab" data-v="time">時系列</span></div><div id="body"></div>`;
  document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{view=t.dataset.v;renderRun()});
  const c=$('#cancel');if(c)c.onclick=async()=>{if(confirm('中止しますか？'))await api(`/api/runs/${id}/cancel`,{})};
@@ -193,11 +194,36 @@ function renderRun(){const ph=PHASES[RUN.recipe]||[];const cur=RUN.state.phase;c
  const sumCost=f=>RUN.tasks.filter(f).reduce((s,t)=>s+((t.meta.usage||{}).total_cost_usd||0),0);const costSub=sumCost(t=>(t.meta.kind||kindOf(t.agent))!=='api'),costApi=sumCost(t=>(t.meta.kind||kindOf(t.agent))==='api');const dur=RUN.tasks.reduce((s,t)=>s+(t.meta.duration_s||0),0);
  $('#stat').innerHTML=`<span>参加 <b>${[...new Set(RUN.tasks.map(t=>t.agent))].length}</b></span>${RUN.state.category?`<span>カテゴリ <b>${CAT_JA[RUN.state.category]||RUN.state.category}</b></span>`:''}<span>タスク <b>${RUN.tasks.filter(t=>t.status==='done').length}/${RUN.tasks.length}</b></span><span>AI 稼働 <b>${Math.round(dur)}s</b></span>${timeStat()}${costApi?`<span title="API 従量課金（Grok など）の実費">API 実費 <b>$${costApi.toFixed(3)}</b></span>`:''}${costSub?`<span title="Claude Code の推定額。Max/Pro サブスクなら課金されず利用枠を消費">Claude 推定 <b>$${costSub.toFixed(2)}</b> <span class="tiny">(枠)</span></span>`:''}`;
  $('#final').innerHTML=finished&&RUN.summary?`<div class="card final"><h2>${RUN.status==='done'?'✅ 最終結果':'結果'}</h2><div class="md">${md(RUN.summary)}</div></div>`:'';
+ renderFollowup(finished);
  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('cur',x.dataset.v===view));
  const key=view+'|'+RUN.tasks.map(t=>t.id+':'+(view==='results'?t.status:'')).join(',');
  if(key!==bodyKey){bodyKey=key;renderBody();return}
  // same structure: refresh only column headers (status pill, timing, score) in place
  RUN.tasks.forEach(t=>{const col=document.querySelector(`.col[data-task="${t.id}"]`);if(col){const h=col.querySelector('h3');const tmp=document.createElement('div');tmp.innerHTML=colHead(t);if(h&&h.innerHTML!==tmp.firstChild.innerHTML)h.innerHTML=tmp.firstChild.innerHTML}})}
+let childrenLoaded=false;
+function followTargets(){const parts=[...new Set(RUN.tasks.map(t=>t.agent))];const rest=agents.filter(a=>a.online&&!parts.includes(a.name)).map(a=>a.name);const synth=RUN.spec.synthesizer||RUN.spec.agent||parts[0];return {synth,list:[...parts.filter(n=>agents.some(a=>a.name===n&&a.online)),...rest]}}
+function synthSession(){const t=[...RUN.tasks].reverse().find(t=>(t.step==='synthesize'||t.step==='run')&&t.status==='done'&&t.meta.session_id&&kindOf(t.agent)==='claude');return t?{agent:t.agent,sid:t.meta.session_id}:null}
+async function renderFollowup(finished){const el=$('#followup');if(!el)return;if(!finished){el.innerHTML='';return}
+ const {synth,list}=followTargets();const ses=synthSession();
+ if(!el.querySelector('#fu-text')){el.innerHTML=`<div class="card"><h2>続きを頼む</h2><div class="sub">この結果を踏まえた追加の依頼。${ses?`<b class="t-claude">${esc(ses.agent)}</b> は会話を覚えたまま再開できます`:'選んだ相手に元課題と最終結果を添えて渡します'}</div>
+  <div class="row"><select id="fu-agent" style="flex:0 1 260px">${list.map(n=>`<option value="${n}" ${n===(ses?ses.agent:synth)?'selected':''}>${esc(n)}${ses&&n===ses.agent?'（記憶あり）':''}</option>`).join('')}</select>
+  <textarea id="fu-text" style="flex:1;min-height:64px" placeholder="例：手順1と2を実際に実行して結果を報告して"></textarea>
+  <button id="fu-send" style="flex:0 0 auto">送る</button></div><div id="fu-children" style="margin-top:10px"></div></div>`;
+  $('#fu-send').onclick=async()=>{const text=$('#fu-text').value.trim();if(!text)return toast('依頼を書いてください');const agent=$('#fu-agent').value;
+   const useResume=ses&&agent===ses.agent;const ctx=`以前のミッション「${RUN.title}」の続きの依頼です。
+
+# 元の課題
+${RUN.spec.prompt}
+
+# そのときの最終結果
+${RUN.summary}
+
+# 追加の依頼
+`;
+   const spec={prompt:(useResume?`前回のミッション（この会話で行った作業）の続きです。追加の依頼: ${text}`:ctx+text),agent,workdir:RUN.spec.workdir||null,parent_run:RUN.id};
+   if(useResume)spec.resume_session=ses.sid;
+   try{const j=await api('/api/runs',{recipe:'single',project:RUN.project,title:'↳ '+text.slice(0,60),spec,created_by:'web-followup'});toast('送りました');go('/runs/'+j.run.id)}catch(e){toast(e.message)}};}
+ if(!childrenLoaded){childrenLoaded=true;try{const j=await api('/api/runs?limit=200&parent='+RUN.id);const c=$('#fu-children');if(j.runs.length)c.innerHTML='<div class="tiny" style="margin-bottom:6px">このミッションへの追加依頼:</div>'+j.runs.map(r=>`<div class="run" onclick="go('/runs/${r.id}')"><div>${pill(r.status)}</div><div style="min-width:0"><div class="ti">${esc(r.title)}</div><div class="me">${esc(r.spec.agent||'')} · ${fmtDt(r.created_at)}</div></div></div>`).join('')}catch(e){}}}
 function msgHtml(m,withActor){if(m.role==='result'&&!m.content)return`<div class="msg result tiny">✔ 完了${m.data&&m.data.total_cost_usd!=null?' · $'+m.data.total_cost_usd.toFixed(3):''}</div>`;
  const actor=withActor?`${av(m.actor)} <b class="t-${kindOf(m.actor)}">${esc(m.actor)}</b> `:'';const body=m.role==='assistant'||m.role==='result'?`<div class="md">${md(m.content.length>8000?m.content.slice(0,8000)+'…':m.content)}</div>`:esc(m.content.length>6000?m.content.slice(0,6000)+'…':m.content);
  if(m.role==='tool_result'||m.role==='thinking'||m.role==='stderr'||m.role==='system')return`<details><summary><span class="ts">${fmtTs(m.ts)}</span>${withActor?esc(m.actor)+' · ':''}${{tool_result:'結果',thinking:'思考',stderr:'stderr',system:'system'}[m.role]}${m.data&&m.data.is_error?' ⚠':''} · ${esc(m.content.slice(0,90).replace(/\n/g,' '))}</summary><div class="msg ${m.role}">${body}</div></details>`;

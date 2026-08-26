@@ -233,7 +233,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, str(e))
             return self._json({"run": run}, 201)
         if path == "/api/runs" and method == "GET":
-            return self._json({"runs": st.list_runs(q1("project"), int(q1("limit", 50)))})
+            runs = st.list_runs(q1("project"), int(q1("limit", 50)))
+            if q1("parent"):
+                runs = [r for r in runs if r["spec"].get("parent_run") == q1("parent")]
+            return self._json({"runs": runs})
         if (mm := m(r"/api/runs/([^/]+)")) and method == "GET":
             run = st.run_detail(mm.group(1))
             if not run:

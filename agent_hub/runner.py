@@ -125,6 +125,8 @@ class AgentWorker(threading.Thread):
         cfg = {**self.cfg, "name": self.name_}
         if task["meta"].get("model"):
             cfg["model"] = task["meta"]["model"]
+        if task["meta"].get("resume_session"):
+            cfg["resume"] = task["meta"]["resume_session"]
         stop_watch = threading.Event()
 
         def watch_cancel() -> None:
