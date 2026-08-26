@@ -83,7 +83,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:12px;padding:3px 0;lis
 /* markdown */
 .md{line-height:1.7;overflow-wrap:anywhere}.md h1,.md h2,.md h3{margin:16px 0 6px;font-size:15px;font-weight:700;padding-bottom:4px;border-bottom:1px solid var(--line)}.md h3{font-size:14px;border:0}.md p{margin:6px 0}.md ul,.md ol{margin:6px 0;padding-left:22px}.md li{margin:2px 0}
 .md pre{background:#0a0c11;color:#e8ebf1;border:1px solid var(--line);border-radius:12px;padding:12px 14px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;margin:8px 0}.md code{font-family:var(--mono);font-size:12.5px;background:rgba(127,127,127,.15);padding:1px 5px;border-radius:5px}.md pre code{background:none;padding:0}
-.md blockquote{border-left:3px solid var(--acc2);margin:8px 0;padding:2px 12px;color:var(--mut)}.md table{border-collapse:collapse;margin:8px 0;max-width:100%;display:block;overflow-x:auto}.md td,.md th{border:1px solid var(--line);padding:4px 8px}
+.md blockquote{border-left:3px solid var(--acc2);margin:8px 0;padding:2px 12px;color:var(--mut)}.md table{border-collapse:collapse;margin:10px 0;max-width:100%;display:block;overflow-x:auto;font-size:13px}.md th{background:var(--card2);text-align:left;font-weight:600}.md td,.md th{border:1px solid var(--line);padding:5px 10px;vertical-align:top}
 .stat{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--mut)}.stat b{color:var(--fg);font-weight:600}
 .empty{padding:26px;text-align:center;color:var(--dim)}
 .skel{height:14px;border-radius:6px;background:linear-gradient(90deg,var(--card2),var(--line),var(--card2));background-size:200% 100%;animation:shimmer 1.4s linear infinite;margin:8px 0}
@@ -117,10 +117,15 @@ function route(){settle();const m=location.pathname.match(/^\/runs\/([^/]+)/);if
 function md(src){let t=esc(src||'');const blocks=[];t=t.replace(/```([\w+-]*)\n([\s\S]*?)```/g,(m,l,c)=>{blocks.push(`<pre><code>${c.replace(/\n$/,'')}</code></pre>`);return`\uE000${blocks.length-1}\uE000`});
  t=t.replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/^#{3,6} (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h1>$1</h1>')
  .replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\n]+)\*/g,'$1<em>$2</em>').replace(/^&gt; ?(.*)$/gm,'<blockquote>$1</blockquote>').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
- const out=[];let list=null;for(const ln of t.split('\n')){const ul=ln.match(/^\s*[-*・] (.*)$/),ol=ln.match(/^\s*\d+[.)] (.*)$/);const typ=ul?'ul':ol?'ol':null;
+ const out=[];let list=null,tbl=null;const cells=l=>l.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim());
+ const flushT=()=>{if(!tbl)return;const [h,...rows]=tbl;out.push('<table><thead><tr>'+cells(h).map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cells(r).map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>');tbl=null};
+ for(const ln of t.split('\n')){
+  if(/^\s*\|.*\|\s*$/.test(ln)){if(list){out.push(`</${list}>`);list=null}if(tbl&&/^\s*\|?\s*:?-{2,}/.test(ln))continue;if(!tbl)tbl=[];tbl.push(ln);continue}
+  flushT();
+  const ul=ln.match(/^\s*[-*・] (.*)$/),ol=ln.match(/^\s*\d+[.)] (.*)$/);const typ=ul?'ul':ol?'ol':null;
   if(typ){if(list!==typ){if(list)out.push(`</${list}>`);out.push(`<${typ}>`);list=typ}out.push(`<li>${(ul||ol)[1]}</li>`)}
-  else{if(list){out.push(`</${list}>`);list=null}if(/^<(h\d|pre|blockquote)/.test(ln)||/^\uE000\d+\uE000$/.test(ln))out.push(ln);else if(ln.trim()==='')out.push('');else out.push(`<p>${ln}</p>`)}}
- if(list)out.push(`</${list}>`);return out.join('\n').replace(/\uE000(\d+)\uE000/g,(m,i)=>blocks[+i])}
+  else{if(list){out.push(`</${list}>`);list=null}if(/^<(h\d|pre|blockquote)/.test(ln)||/^\d+$/.test(ln))out.push(ln);else if(ln.trim()==='')out.push('');else out.push(`<p>${ln}</p>`)}}
+ flushT();if(list)out.push(`</${list}>`);return out.join('\n').replace(/(\d+)/g,(m,i)=>blocks[+i])}
 /* ---------------- home ---------------- */
 let selected=[],recipe='team',models={};
 const MODELS={claude:['','opus','fable','sonnet','haiku'],codex:['','gpt-5.6-sol','gpt-5.5'],api:['']};
