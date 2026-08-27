@@ -238,8 +238,13 @@ class Orchestrator:
                 handler(run, tasks)
 
     def cancel(self, run_id: str) -> dict[str, Any]:
-        self.store.cancel_queued(run_id)
-        return self.store.update_run(run_id, status="cancelled")
+        # Atomic under the store lock: mark the run cancelled BEFORE cancelling its tasks so a
+        # task finishing mid-cancel cannot advance the phase and spawn new tasks (on_task_finished
+        # bails out once run.status != 'running', and it takes the same lock).
+        with self.store.lock:
+            run = self.store.update_run(run_id, status="cancelled")
+            self.store.cancel_queued(run_id)
+        return run
 
     # ---- single ---------------------------------------------------------------
     def _start_single(self, project, title, spec, created_by):

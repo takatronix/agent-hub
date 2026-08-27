@@ -133,7 +133,7 @@ def leaderboard(runs: list[dict[str, Any]]) -> dict[str, Any]:
     """agent -> category -> {avg, n, best, adopted, runs}; plus 'all' bucket."""
     acc: dict[str, dict[str, dict[str, Any]]] = defaultdict(lambda: defaultdict(lambda: {"sum": 0.0, "n": 0, "best": 0, "adopted": 0, "runs": 0, "tsum": 0.0, "tn": 0}))
     for r in runs:
-        if r["recipe"] != "review_panel" or r["status"] != "done":
+        if r["recipe"] not in ("review_panel", "parallel") or r["status"] != "done":
             continue
         cat = r["state"].get("category") or "other"
         for agent, d in (r["state"].get("results") or {}).items():

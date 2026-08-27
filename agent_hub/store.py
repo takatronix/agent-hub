@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -82,7 +83,32 @@ CREATE TABLE IF NOT EXISTS artifacts (
   summary TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY, project TEXT NOT NULL DEFAULT 'default', title TEXT NOT NULL,
+  recipe TEXT NOT NULL, spec TEXT NOT NULL DEFAULT '{}',
+  interval_sec INTEGER NOT NULL, next_at TEXT NOT NULL, last_run_id TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1, notify TEXT NOT NULL DEFAULT 'on_report',
+  created_at TEXT NOT NULL
+);
 """
+
+
+def _iso_plus(iso: str, seconds: int) -> str:
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00")) + timedelta(seconds=seconds)
+    return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _advance_next(next_at: str, interval_sec: int, now: str) -> str:
+    """Add interval_sec to next_at until it is strictly greater than now (coalesce skips)."""
+    if interval_sec <= 0:
+        return _iso_plus(now, 1)
+    nxt = datetime.fromisoformat(next_at.replace("Z", "+00:00"))
+    now_dt = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    step = timedelta(seconds=interval_sec)
+    if nxt <= now_dt:
+        missed = int((now_dt - nxt).total_seconds() // interval_sec) + 1
+        nxt = nxt + step * missed
+    return nxt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class _Rows:
@@ -306,15 +332,17 @@ class Store:
         return task
 
     def finish_task(self, task_id: str, status: str, result: str | None = None, error: str | None = None,
-                    meta_update: dict[str, Any] | None = None) -> dict[str, Any]:
+                    meta_update: dict[str, Any] | None = None, claimed_by: str | None = None) -> dict[str, Any]:
         if status not in ("done", "failed", "cancelled"):
             raise ValueError("finish status must be done/failed/cancelled")
         with self._lock:
             task = self.get_task(task_id)
             if not task:
                 raise KeyError(task_id)
-            if task["status"] == "cancelled":  # cancelled while the runner was still working: keep it cancelled
-                return task
+            if task["status"] in ("done", "failed", "cancelled"):
+                return task  # terminal: idempotent — never let a double / stale finish overwrite a settled task
+            if claimed_by is not None and task["claimed_by"] is not None and task["claimed_by"] != claimed_by:
+                return task  # stale/reaped runner: don't let it overwrite the current claimant's result
             meta = {**task["meta"], **(meta_update or {})}
             ts = now_iso()
             self._conn.execute(
@@ -433,6 +461,98 @@ class Store:
             q += " AND task_id=?"
             args.append(task_id)
         return [dict(r) for r in self._conn.execute(q + " ORDER BY created_at", args).fetchall()]
+
+    # -- schedules ------------------------------------------------------------
+    def create_schedule(self, project: str, title: str, recipe: str, interval_sec: int,
+                        spec: dict[str, Any] | None = None, notify: str = "on_report") -> dict[str, Any]:
+        self.ensure_project(project)
+        sid = new_id("sch")
+        ts = now_iso()
+        next_at = _iso_plus(ts, interval_sec)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO schedules(id,project,title,recipe,spec,interval_sec,next_at,enabled,notify,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (sid, project, title, recipe, dumps(spec or {}), int(interval_sec), next_at, 1, notify, ts),
+            )
+            sch = self.get_schedule(sid)
+        self.emit("schedule", {"schedule": sch})
+        return sch
+
+    def list_schedules(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute("SELECT * FROM schedules ORDER BY created_at DESC").fetchall()
+        return [self._schedule(r) for r in rows]
+
+    def get_schedule(self, schedule_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM schedules WHERE id=?", (schedule_id,)).fetchone()
+        return self._schedule(row) if row else None
+
+    def toggle_schedule(self, schedule_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM schedules WHERE id=?", (schedule_id,)).fetchone()
+            if not row:
+                return None
+            self._conn.execute("UPDATE schedules SET enabled=? WHERE id=?", (0 if row["enabled"] else 1, schedule_id))
+            sch = self.get_schedule(schedule_id)
+        self.emit("schedule", {"schedule": sch})
+        return sch
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        with self._lock:
+            ok = self._conn.execute("DELETE FROM schedules WHERE id=?", (schedule_id,)).rowcount > 0
+        if ok:
+            self.emit("schedule", {"schedule": {"id": schedule_id, "deleted": True}})
+        return ok
+
+    def set_schedule_last_run(self, schedule_id: str, run_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            self._conn.execute("UPDATE schedules SET last_run_id=? WHERE id=?", (run_id, schedule_id))
+            sch = self.get_schedule(schedule_id)
+        if sch:
+            self.emit("schedule", {"schedule": sch})
+        return sch
+
+    def advance_schedule(self, schedule_id: str, now: str | None = None) -> dict[str, Any] | None:
+        """Advance next_at past `now`, coalescing accumulated intervals into one hop."""
+        now = now or now_iso()
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM schedules WHERE id=?", (schedule_id,)).fetchone()
+            if not row:
+                return None
+            self._conn.execute("UPDATE schedules SET next_at=? WHERE id=?",
+                               (_advance_next(row["next_at"], int(row["interval_sec"]), now), schedule_id))
+            return self.get_schedule(schedule_id)
+
+    def claim_due_schedules(self, now: str | None = None) -> list[dict[str, Any]]:
+        """Return enabled schedules whose next_at<=now, advancing each next_at past `now`
+        (coalesced) inside the same lock so a slow tick cannot double-fire."""
+        now = now or now_iso()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM schedules WHERE enabled=1 AND next_at<=? ORDER BY next_at ASC", (now,)).fetchall()
+            due = [self._schedule(r) for r in rows]
+            for r in rows:
+                self._conn.execute("UPDATE schedules SET next_at=? WHERE id=?",
+                                   (_advance_next(r["next_at"], int(r["interval_sec"]), now), r["id"]))
+        return due
+
+    def prune_old(self, days: int = 14) -> int:
+        """Delete messages of finished (done/failed/cancelled) runs older than `days`,
+        oldest first; runs/tasks bodies are kept."""
+        cutoff = _iso_plus(now_iso(), -days * 86400)
+        with self._lock:
+            ids = [r["id"] for r in self._conn.execute(
+                "SELECT id FROM runs WHERE status IN ('done','failed','cancelled') AND updated_at < ? ORDER BY updated_at ASC",
+                (cutoff,)).fetchall()]
+            n = 0
+            for rid in ids:
+                n += self._conn.execute("DELETE FROM messages WHERE run_id=?", (rid,)).rowcount
+        return n
+
+    def _schedule(self, row: sqlite3.Row) -> dict[str, Any]:
+        s = dict(row)
+        s["spec"] = loads(s["spec"], {})
+        return s
 
     # -- aggregate ------------------------------------------------------------
     def run_detail(self, run_id: str) -> dict[str, Any] | None:

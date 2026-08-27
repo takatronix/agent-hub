@@ -15,8 +15,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from .recipes import Orchestrator
 from . import league
+from .notify import Notifier
 from .store import Store
-from .util import load_dotenv
+from .util import load_dotenv, now_iso
 from . import ui
 
 
@@ -30,16 +31,22 @@ class ApiError(Exception):
 class Hub:
     """Shared state for all request handler threads."""
 
-    def __init__(self, store: Store, token: str | None, read_token: str | None, reaper: bool = True):
+    def __init__(self, store: Store, token: str | None, read_token: str | None, reaper: bool = True,
+                 scheduler: bool = True, notifier: Notifier | None = None):
         self.store = store
         self.token = token or None
         self.read_token = read_token or None
         self.orch = Orchestrator(store)
+        self.notifier = notifier or Notifier()
         self.subscribers: list[tuple[str | None, queue.Queue]] = []
         self.wakeup = threading.Condition()
+        self._notify_status: dict[str, str] = {}  # run_id -> last seen status (for idempotent notify)
+        self._last_prune_day: str | None = None
         store.listeners.append(self._on_event)
         if reaper:
             threading.Thread(target=self._reaper, daemon=True, name="reaper").start()
+        if scheduler:
+            threading.Thread(target=self._scheduler, daemon=True, name="scheduler").start()
 
     def reap_lost_tasks(self, agent_grace: float = 120.0, offline_after: float = 600.0) -> list[str]:
         """A running task is 'lost' when its agent heartbeats as idle on something else, or has been
@@ -77,6 +84,43 @@ class Hub:
             except Exception as e:  # noqa: BLE001
                 print(f"reaper error: {e}", flush=True)
 
+    def run_schedule(self, sch: dict[str, Any]) -> dict[str, Any]:
+        """Start a run for a schedule, injecting schedule_id + notify into the spec."""
+        spec = {**(sch.get("spec") or {}), "schedule_id": sch["id"], "notify": sch.get("notify") or "on_report"}
+        run = self.orch.start(sch["recipe"], sch.get("project") or "default", sch["title"], spec, created_by="schedule")
+        self.store.set_schedule_last_run(sch["id"], run["id"])
+        return run
+
+    def _tick_schedules(self) -> None:
+        # claim_due_schedules already advanced next_at for every due row; handle each schedule
+        # independently so one bad schedule (e.g. unknown recipe) can't skip the rest of the batch.
+        for sch in self.store.claim_due_schedules(now_iso()):
+            try:
+                last = sch.get("last_run_id")
+                if last:
+                    prev = self.store.get_run(last)
+                    if prev and prev["status"] == "running":
+                        self.store.add_message(actor="hub", role="system", run_id=last,
+                                               content=f"スケジュール '{sch['title']}' はまだ前回の run が実行中のためスキップ")
+                        continue
+                run = self.run_schedule(sch)
+                self.store.add_message(actor="hub", role="system", run_id=run["id"],
+                                       content=f"スケジュール '{sch['title']}' から起動 (recipe={sch['recipe']})")
+            except Exception as e:  # noqa: BLE001 - never let one schedule break the tick
+                print(f"schedule {sch.get('id')} failed: {e}", flush=True)
+
+    def _scheduler(self) -> None:
+        while True:
+            time.sleep(30)
+            try:
+                self._tick_schedules()
+                day = now_iso()[:10]
+                if self._last_prune_day != day:
+                    self._last_prune_day = day
+                    self.store.prune_old(days=14)
+            except Exception as e:  # noqa: BLE001
+                print(f"scheduler error: {e}", flush=True)
+
     def _on_event(self, event: dict[str, Any]) -> None:
         run_id = None
         for key in ("run", "task", "message", "artifact"):
@@ -92,6 +136,25 @@ class Hub:
         if event["event"] == "task":
             with self.wakeup:
                 self.wakeup.notify_all()
+        if event["event"] == "run":
+            self._maybe_notify(event["run"])
+
+    def _maybe_notify(self, run: dict[str, Any]) -> None:
+        """Emit a notification only on the transition into done/failed, honoring run.spec.notify policy."""
+        rid, status = run.get("id"), run.get("status")
+        if not rid or status not in ("done", "failed"):
+            return
+        if self._notify_status.get(rid) == status:
+            return
+        self._notify_status[rid] = status
+        policy = (run.get("spec") or {}).get("notify") or "always"
+        if policy == "on_failure" and status != "failed":
+            return
+        if policy == "on_report":
+            obj = league.parse_json_block(run.get("summary") or "", "notify")
+            if not (obj and obj.get("notify") is True):  # parse_json_block returns the dict, truthy even for {"notify": false}
+                return
+        self.notifier.emit(run)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -112,6 +175,8 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method: str) -> None:
         url = urlsplit(self.path)
         path, query = url.path, parse_qs(url.query)
+        n = int(self.headers.get("Content-Length") or 0)
+        self._raw_body = self.rfile.read(n) if n > 0 else b""
         try:
             if not self._authorized(method, path, query):
                 raise ApiError(401, "unauthorized")
@@ -147,10 +212,9 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _body(self) -> dict[str, Any]:
-        n = int(self.headers.get("Content-Length") or 0)
-        if n == 0:
+        raw = getattr(self, "_raw_body", b"")
+        if not raw:
             return {}
-        raw = self.rfile.read(n)
         try:
             data = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as e:
@@ -194,11 +258,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"projects": st.list_projects()})
         if path == "/api/projects" and method == "POST":
             b = self._body()
+            if not b.get("name"):
+                raise ApiError(400, "missing name")
             return self._json({"project": st.ensure_project(b["name"], b.get("title"), b.get("description", ""))})
         if path == "/api/agents" and method == "GET":
             return self._json({"agents": st.list_agents()})
         if path == "/api/agents/heartbeat" and method == "POST":
             b = self._body()
+            if not b.get("name"):
+                raise ApiError(400, "missing name")
             return self._json({"agent": st.heartbeat(b["name"], b.get("kind", "unknown"), b.get("host", ""),
                                                      b.get("status", "idle"), b.get("current_task"), b.get("meta"))})
 
@@ -250,6 +318,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/tasks" and method == "POST":
             b = self._body()
+            for k in ("prompt", "agent"):
+                if not b.get(k):
+                    raise ApiError(400, f"missing {k}")
             task = st.create_task(b.get("project") or "default", b.get("title") or b["prompt"][:60], b["prompt"],
                                   b["agent"], workdir=b.get("workdir"), meta=b.get("meta"))
             return self._json({"task": task}, 201)
@@ -275,7 +346,8 @@ class Handler(BaseHTTPRequestHandler):
         if (mm := m(r"/api/tasks/([^/]+)/finish")) and method == "POST":
             b = self._body()
             try:
-                task = st.finish_task(mm.group(1), b.get("status", "done"), b.get("result"), b.get("error"), b.get("meta"))
+                task = st.finish_task(mm.group(1), b.get("status", "done"), b.get("result"), b.get("error"),
+                                      b.get("meta"), claimed_by=b.get("claimed_by"))
             except KeyError:
                 raise ApiError(404, "task not found")
             self.hub.orch.on_task_finished(task)
@@ -299,6 +371,47 @@ class Handler(BaseHTTPRequestHandler):
             if not art:
                 raise ApiError(404, "artifact not found")
             return self._raw(Path(art["path"]).read_bytes(), "text/plain; charset=utf-8")
+
+        if path == "/api/schedules" and method == "GET":
+            return self._json({"schedules": st.list_schedules()})
+        if path == "/api/schedules" and method == "POST":
+            b = self._body()
+            for k in ("title", "recipe", "interval_sec"):
+                if k not in b:
+                    raise ApiError(400, f"missing {k}")
+            if b["recipe"] not in ("single", "parallel", "review_panel", "team"):
+                raise ApiError(400, f"unknown recipe: {b['recipe']}")
+            try:
+                interval = int(b["interval_sec"])
+            except (TypeError, ValueError):
+                raise ApiError(400, "interval_sec must be an integer")
+            if interval <= 0:
+                raise ApiError(400, "interval_sec must be positive")
+            spec = b.get("spec")
+            if spec is not None and not isinstance(spec, dict):
+                raise ApiError(400, "spec must be an object")
+            notify = b.get("notify", "on_report")
+            if notify not in ("always", "on_failure", "on_report"):
+                raise ApiError(400, "notify must be always/on_failure/on_report")
+            sch = st.create_schedule(b.get("project") or "default", b["title"], b["recipe"], interval,
+                                     spec=spec, notify=notify)
+            return self._json({"schedule": sch}, 201)
+        if (mm := m(r"/api/schedules/([^/]+)/toggle")) and method == "POST":
+            sch = st.toggle_schedule(mm.group(1))
+            if not sch:
+                raise ApiError(404, "schedule not found")
+            return self._json({"schedule": sch})
+        if (mm := m(r"/api/schedules/([^/]+)/run_now")) and method == "POST":
+            sch = st.get_schedule(mm.group(1))
+            if not sch:
+                raise ApiError(404, "schedule not found")
+            try:
+                run = self.hub.run_schedule(sch)
+            except (ValueError, KeyError) as e:
+                raise ApiError(400, str(e))
+            return self._json({"run": run}, 201)
+        if (mm := m(r"/api/schedules/([^/]+)/delete")) and method == "POST":
+            return self._json({"deleted": st.delete_schedule(mm.group(1))})
 
         if path == "/api/stream" and method == "GET":
             return self._sse(q1("run_id"))
@@ -346,7 +459,8 @@ def main() -> None:
     port = int(os.environ.get("PORT") or os.environ.get("HUB_PORT") or 8765)
     data_dir = Path(os.environ.get("HUB_DATA_DIR") or Path.home() / ".agent-hub")
     store = Store(data_dir / "hub.sqlite3", data_dir / "artifacts")
-    hub = Hub(store, os.environ.get("HUB_TOKEN"), os.environ.get("HUB_READ_TOKEN"))
+    notifier = Notifier(os.environ.get("HUB_PUBLIC_URL"), os.environ.get("HUB_NTFY_URL"))
+    hub = Hub(store, os.environ.get("HUB_TOKEN"), os.environ.get("HUB_READ_TOKEN"), notifier=notifier)
     srv = make_server(host, port, hub)
     print(f"agent-hub listening on http://{host}:{port}  (data: {data_dir}, auth: {'token' if hub.token else 'OPEN'})", flush=True)
     try:
